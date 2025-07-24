@@ -50,7 +50,6 @@ namespace TestFA
 
     struct FATransition : IEquatable<FATransition>
     {
-        public readonly FAAttributes Attributes = new FAAttributes();
         /// <summary>
         /// The minimum codepoint of the range
         /// </summary>
@@ -103,7 +102,7 @@ namespace TestFA
         /// <returns></returns>
         public bool Equals(FATransition rhs)
         {
-            return To == rhs.To && Min == rhs.Min && Max == rhs.Max && rhs.Attributes.Equals(Attributes);
+            return To == rhs.To && Min == rhs.Min && Max == rhs.Max;
         }
         /// <summary>
         /// Returns a hashcode for the transition
@@ -113,9 +112,9 @@ namespace TestFA
         {
             if (To == null)
             {
-                return Min.GetHashCode() ^ Max.GetHashCode() ^ Attributes.GetHashCode();
+                return Min.GetHashCode() ^ Max.GetHashCode();
             }
-            return Min.GetHashCode() ^ Max.GetHashCode() ^ To.GetHashCode() ^ Attributes.GetHashCode();
+            return Min.GetHashCode() ^ Max.GetHashCode() ^ To.GetHashCode();
         }
         /// <summary>
         /// Value equality
@@ -128,7 +127,7 @@ namespace TestFA
             if (!(obj is FATransition)) return false;
             FATransition rhs = (FATransition)obj;
             // ref compare on To so its attributes will always be the same
-            return To == rhs.To && Min == rhs.Min && Max == rhs.Max && Attributes.Equals(rhs.Attributes);
+            return To == rhs.To && Min == rhs.Min && Max == rhs.Max;
         }
     }
 
@@ -232,6 +231,10 @@ namespace TestFA
                 }
                 return false;
             }
+        }
+        public void RemoveTransition(FATransition trn)
+        {
+            _transitions.Remove(trn);
         }
         public void AddTransition(FATransition transition)
         {

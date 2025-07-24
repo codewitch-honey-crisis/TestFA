@@ -282,10 +282,12 @@ namespace TestFA
         {
             Position = position;
         }
-        public bool Nullable { get; set; }
-        public HashSet<RegexExpression> FirstPos { get; set; } = new HashSet<RegexExpression>();
-        public HashSet<RegexExpression> LastPos { get; set; } = new HashSet<RegexExpression>();
 
+        public virtual bool IsLeaf { get; } = false;
+        public virtual IList<FARange> GetRanges()
+        {
+            return new FARange[0];
+        }
         /// <summary>
 		/// Converts a series of characters into a series of UTF-32 codepoints
 		/// </summary>
@@ -1254,6 +1256,107 @@ namespace TestFA
         }
     }
     /// <summary>
+    /// Represents a single character literal
+    /// </summary>
+#if FALIB
+	public
+#endif
+    partial class RegexTerminatorExpression : RegexExpression, IEquatable<RegexTerminatorExpression>
+    {
+        public override bool IsLeaf => true;
+        /// <summary>
+        /// Indicates whether or not this statement is a single element or not
+        /// </summary>
+        /// <remarks>If false, this statement will be wrapped in parentheses if necessary</remarks>
+        public override bool IsSingleElement => true;
+        /// <summary>
+        /// Indicates whether or not this statement is a empty element or not
+        /// </summary>
+        public override bool IsEmptyElement => false;
+        
+        /// <summary>
+        /// Creates a terminator expression with the specified codepoint
+        /// </summary>
+        public RegexTerminatorExpression() { }
+
+        /// <summary>
+        /// Appends the textual representation to a <see cref="StringBuilder"/>
+        /// </summary>
+        /// <param name="sb">The string builder to use</param>
+        /// <remarks>Used by ToString()</remarks>
+        protected internal override void AppendTo(StringBuilder sb)
+        {
+            sb.Append("<<END>>");
+
+        }
+
+
+        /// <summary>
+        /// Creates a new copy of this expression
+        /// </summary>
+        /// <returns>A new copy of this expression</returns>
+        protected override RegexExpression CloneImpl()
+            => Clone();
+        /// <summary>
+        /// Creates a new copy of this expression
+        /// </summary>
+        /// <returns>A new copy of this expression</returns>
+        public new RegexTerminatorExpression Clone()
+        {
+            return new RegexTerminatorExpression();
+        }
+
+        #region Value semantics
+        /// <summary>
+        /// Indicates whether this expression is the same as the right hand expression
+        /// </summary>
+        /// <param name="rhs">The expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public bool Equals(RegexTerminatorExpression? rhs)
+        {
+            if (ReferenceEquals(rhs, null)) return false;
+            if (Position != rhs.Position) return false;
+            return true;
+        }
+        /// <summary>
+        /// Indicates whether this expression is the same as the right hand expression
+        /// </summary>
+        /// <param name="rhs">The expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public override bool Equals(object? rhs)
+            => Equals(rhs as RegexTerminatorExpression);
+        /// <summary>
+        /// Computes a hash code for this expression
+        /// </summary>
+        /// <returns>A hash code for this expression</returns>
+        public override int GetHashCode()
+            => 0;
+        /// <summary>
+        /// Indicates whether or not two expression are the same
+        /// </summary>
+        /// <param name="lhs">The left hand expression to compare</param>
+        /// <param name="rhs">The right hand expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public static bool operator ==(RegexTerminatorExpression lhs, RegexTerminatorExpression rhs)
+        {
+            if (ReferenceEquals(lhs, null)) return false;
+            return true;
+        }
+        /// <summary>
+        /// Indicates whether or not two expression are different
+        /// </summary>
+        /// <param name="lhs">The left hand expression to compare</param>
+        /// <param name="rhs">The right hand expression to compare</param>
+        /// <returns>True if the expressions are different, otherwise false</returns>
+        public static bool operator !=(RegexTerminatorExpression lhs, RegexTerminatorExpression rhs)
+        {
+            if (ReferenceEquals(lhs, null)) return true;
+            return false;
+        }
+        #endregion
+
+    }
+    /// <summary>
     /// Represents a binary expression
     /// </summary>
 #if FALIB
@@ -1288,7 +1391,7 @@ namespace TestFA
 #if FALIB
 	public
 #endif
-    partial class RegexLiteralExpression : RegexUnaryExpression, IEquatable<RegexLiteralExpression>
+    partial class RegexLiteralExpression : RegexExpression, IEquatable<RegexLiteralExpression>
     {
         /// <summary>
         /// Indicates whether or not this statement is a single element or not
@@ -1299,6 +1402,7 @@ namespace TestFA
         /// Indicates whether or not this statement is a empty element or not
         /// </summary>
         public override bool IsEmptyElement => Codepoint == -1;
+        public override bool IsLeaf => true;
         /// <summary>
         /// Indicates the codepoint in this expression
         /// </summary>
@@ -1326,7 +1430,11 @@ namespace TestFA
                 Codepoint = ToUtf32(value).First();
             }
         }
-
+        public override IList<FARange> GetRanges()
+        {
+            if (Codepoint == -1) return base.GetRanges();
+            return new FARange[] { new FARange(Codepoint, Codepoint) };
+        }
         /// <summary>
         /// Creates a literal expression with the specified codepoint
         /// </summary>
@@ -1384,6 +1492,7 @@ namespace TestFA
         {
             if (ReferenceEquals(rhs, this)) return true;
             if (ReferenceEquals(rhs, null)) return false;
+            if(Position!=rhs.Position) return false;
             return Codepoint == rhs.Codepoint;
         }
         /// <summary>
@@ -1826,6 +1935,7 @@ namespace TestFA
 
     partial class RegexCharsetExpression : RegexExpression, IEquatable<RegexCharsetExpression>
     {
+        public override bool IsLeaf => true;
         /// <summary>
         /// Indicates whether or not this statement is a empty element or not
         /// </summary>
@@ -1853,7 +1963,7 @@ namespace TestFA
         /// Retrieve the codepoint ranges for the character set
         /// </summary>
         /// <returns></returns>
-        public IList<FARange> GetRanges()
+        public override IList<FARange> GetRanges()
         {
             var result = new List<FARange>();
             for (int ic = Entries.Count, i = 0; i < ic; ++i)
@@ -1978,6 +2088,7 @@ namespace TestFA
         {
             if (ReferenceEquals(rhs, this)) return true;
             if (ReferenceEquals(rhs, null)) return false;
+            if(Position!= rhs.Position) return false;
             if (HasNegatedRanges == rhs.HasNegatedRanges && rhs.Entries.Count == Entries.Count)
             {
                 for (int ic = Entries.Count, i = 0; i < ic; ++i)
@@ -2101,7 +2212,8 @@ namespace TestFA
         {
             if (ReferenceEquals(rhs, this)) return true;
             if (ReferenceEquals(rhs, null)) return false;
-            if((Left == null && rhs.Left == null)||(Left!=null && Left.Equals(rhs.Left))) {
+            if (Position != rhs.Position) return false;
+            if ((Left == null && rhs.Left == null)||(Left!=null && Left.Equals(rhs.Left))) {
                 return ((Right == null && rhs.Right == null) || (Right != null && Right.Equals(rhs.Right)));
             }
             return false;
@@ -2248,7 +2360,6 @@ namespace TestFA
             {
                 sb.Append("|");
                 Right.AppendTo(sb);
-                sb.Append(Left.ToString());
             } else
             {
                 hasNull = true;
@@ -2286,6 +2397,7 @@ namespace TestFA
         {
             if (ReferenceEquals(rhs, this)) return true;
             if (ReferenceEquals(rhs, null)) return false;
+            if(Position!=rhs.Position) return false;
             if ((Left == null && rhs.Left == null) || (Left != null && Left.Equals(rhs.Left)))
             {
                 return ((Right == null && rhs.Right == null) || (Right != null && Right.Equals(rhs.Right)));
@@ -2491,6 +2603,7 @@ namespace TestFA
         {
             if (ReferenceEquals(rhs, this)) return true;
             if (ReferenceEquals(rhs, null)) return false;
+            if (Position != rhs.Position) return false;
             if (Equals(Expression, rhs.Expression))
             {
                 var lmio = Math.Max(0, MinOccurs);
