@@ -325,16 +325,17 @@ namespace TestFA
                 {
                     return unary.Expression._Visit(this, action, 0, level + 1);
                 }
-                var multi = this as RegexMultiExpression;
-                if (multi != null)
+                var binary = this as RegexBinaryExpression;
+                if (binary != null)
                 {
-                    for (int i = 0; i < multi.Expressions.Count; ++i)
+                    int i = 0;
+                    if(binary.Left!=null)
                     {
-                        var e = multi.Expressions[i];
-                        if (e != null)
-                        {
-                            e._Visit(this, action, i, level + 1);
-                        }
+                        binary.Left._Visit(this, action, i++, level + 1);
+                    }
+                    if (binary.Right != null)
+                    {
+                        binary.Right._Visit(this, action, i, level + 1);
                     }
                 }
                 return true;
@@ -415,7 +416,7 @@ namespace TestFA
                             result = nset;
                         else
                         {
-                            result = new RegexConcatExpression(new RegexExpression[] { result, nset });
+                            result = new RegexConcatExpression(result, nset );
                             result.SetLocation(position);
                         }
                         position = pc.Position;
@@ -465,18 +466,9 @@ namespace TestFA
                             default:
                                 if (-1 != (ich = _ParseEscapePart(pc)))
                                 {
-                                    if (result is RegexLiteralExpression)
-                                    {
-                                        var cptmp = new int[((RegexLiteralExpression)result).Codepoints.Length + 1];
-                                        cptmp[cptmp.Length - 1] = ich;
-                                        Array.Copy(((RegexLiteralExpression)result).Codepoints, cptmp, cptmp.Length - 1);
-                                        ((RegexLiteralExpression)result).Codepoints = cptmp;
-                                        next = null;
-                                    }
-                                    else
-                                    {
-                                        next = new RegexLiteralExpression(new int[] { ich });
-                                    }
+                                    
+                                    next = new RegexLiteralExpression( ich );
+                                    
                                 }
                                 else
                                 {
@@ -492,7 +484,7 @@ namespace TestFA
                         }
                         if (null != result)
                         {
-                            result = new RegexConcatExpression(new RegexExpression[] { result, next });
+                            result = new RegexConcatExpression(result, next );
                             result.SetLocation(position);
                         }
                         else
@@ -512,7 +504,7 @@ namespace TestFA
                             result = next;
                         else
                         {
-                            result = new RegexConcatExpression(new RegexExpression[] { result, next });
+                            result = new RegexConcatExpression( result, next );
                             result.SetLocation(position);
                         }
                         position = pc.Position;
@@ -521,12 +513,12 @@ namespace TestFA
                         if (-1 != pc.Advance())
                         {
                             next = _Parse(pc);
-                            result = new RegexOrExpression(new RegexExpression[] { result, next });
+                            result = new RegexOrExpression(result, next );
                             result.SetLocation(position);
                         }
                         else
                         {
-                            result = new RegexOrExpression(new RegexExpression[] { result, null });
+                            result = new RegexOrExpression(result, null );
                             result.SetLocation(position);
                         }
                         position = pc.Position;
@@ -556,26 +548,17 @@ namespace TestFA
                             result = next;
                         else
                         {
-                            result = new RegexConcatExpression(new RegexExpression[] { result, next });
+                            result = new RegexConcatExpression(result, next);
                             result.SetLocation(pc.Position);
                         }
                         position = pc.Position;
                         break;
                     default:
                         ich = pc.Codepoint;
-                        if (result is RegexLiteralExpression)
-                        {
-                            var cptmp = new int[((RegexLiteralExpression)result).Codepoints.Length + 1];
-                            cptmp[cptmp.Length - 1] = ich;
-                            Array.Copy(((RegexLiteralExpression)result).Codepoints, cptmp, cptmp.Length - 1);
-                            ((RegexLiteralExpression)result).Codepoints = cptmp;
-                            next = null;
-                        }
-                        else
-                        {
-                            next = new RegexLiteralExpression(new int[] { ich });
-                            next.SetLocation(position);
-                        }
+                        
+                        next = new RegexLiteralExpression(ich );
+                        next.SetLocation(position);
+                        
                         pc.Advance();
                         if (next != null)
                         {
@@ -587,7 +570,7 @@ namespace TestFA
                         {
                             if (next != null)
                             {
-                                result = new RegexConcatExpression(new RegexExpression[] { result, next });
+                                result = new RegexConcatExpression(result, next );
                             }
                             result.SetLocation(position);
                         }
@@ -1276,12 +1259,13 @@ namespace TestFA
 #if FALIB
 	public
 #endif
-    abstract partial class RegexMultiExpression : RegexExpression
+    abstract partial class RegexBinaryExpression : RegexExpression
     {
         /// <summary>
-        /// Indicates the expressions
+        /// Indicates the left expression
         /// </summary>
-        public List<RegexExpression> Expressions { get; } = new List<RegexExpression>();
+        public RegexExpression? Left { get; set; } = null;
+        public RegexExpression? Right { get; set; } = null;
     }
     /// <summary>
     /// Represents an expression with a single target expression
@@ -1295,7 +1279,7 @@ namespace TestFA
         /// <summary>
         /// Indicates the target expression
         /// </summary>
-        public RegexExpression Expression { get; set; } = null;
+        public RegexExpression? Expression { get; set; } = null;
 
     }
     /// <summary>
@@ -1304,68 +1288,50 @@ namespace TestFA
 #if FALIB
 	public
 #endif
-    partial class RegexLiteralExpression : RegexExpression, IEquatable<RegexLiteralExpression>
+    partial class RegexLiteralExpression : RegexUnaryExpression, IEquatable<RegexLiteralExpression>
     {
         /// <summary>
         /// Indicates whether or not this statement is a single element or not
         /// </summary>
         /// <remarks>If false, this statement will be wrapped in parentheses if necessary</remarks>
-        public override bool IsSingleElement => Codepoints != null && Codepoints.Length < 2;
+        public override bool IsSingleElement => Codepoint != -1;
         /// <summary>
         /// Indicates whether or not this statement is a empty element or not
         /// </summary>
-        public override bool IsEmptyElement => Codepoints == null || Codepoints.Length == 0;
+        public override bool IsEmptyElement => Codepoint == -1;
         /// <summary>
-        /// Indicates the codepoints in this expression
+        /// Indicates the codepoint in this expression
         /// </summary>
-        public int[]? Codepoints { get; set; } = null;
+        public int Codepoint { get; set; } = -1;
         /// <summary>
         /// Indicates the string literal of this expression
         /// </summary>
-        public string? Value
+        public string Value
         {
             get
             {
-                if (Codepoints == null)
-                {
-                    return null;
-                }
-                if (Codepoints.Length == 0)
+                if (Codepoint == -1)
                 {
                     return "";
                 }
-                var sb = new StringBuilder();
-                for (int i = 0; i < Codepoints.Length; i++)
-                {
-                    sb.Append(char.ConvertFromUtf32(Codepoints[i]));
-                }
-                return sb.ToString();
+                return char.ConvertFromUtf32(Codepoint);
             }
             set
             {
-                if (value == null) throw new NullReferenceException();
-                if (value.Length == 0) throw new InvalidOperationException();
-                if (value == null)
+                if (string.IsNullOrEmpty(value))
                 {
-                    Codepoints = null;
+                    Codepoint = -1;
+                    return;
                 }
-                else if (value.Length == 0)
-                {
-                    Codepoints = new int[0];
-                }
-                else
-                {
-                    var list = new List<int>(ToUtf32(value));
-                    Codepoints = list.ToArray();
-                }
+                Codepoint = ToUtf32(value).First();
             }
         }
 
         /// <summary>
-        /// Creates a literal expression with the specified codepoints
+        /// Creates a literal expression with the specified codepoint
         /// </summary>
-        /// <param name="codepoints">The characters to represent</param>
-        public RegexLiteralExpression(int[] codepoints) { Codepoints = codepoints; }
+        /// <param name="codepoint">The codepoint to represent</param>
+        public RegexLiteralExpression(int codepoint) { Codepoint = codepoint; }
 
         /// <summary>
         /// Creates a literal expression with the specified string
@@ -1384,10 +1350,12 @@ namespace TestFA
         /// <remarks>Used by ToString()</remarks>
         protected internal override void AppendTo(StringBuilder sb)
         {
-            foreach (var cp in Codepoints)
+            if (Codepoint == -1)
             {
-                AppendEscapedChar(char.ConvertFromUtf32(cp), sb);
+                return;
             }
+            AppendEscapedChar(char.ConvertFromUtf32(Codepoint), sb);
+            
         }
 
 
@@ -1412,31 +1380,18 @@ namespace TestFA
         /// </summary>
         /// <param name="rhs">The expression to compare</param>
         /// <returns>True if the expressions are the same, otherwise false</returns>
-        public bool Equals(RegexLiteralExpression rhs)
+        public bool Equals(RegexLiteralExpression? rhs)
         {
             if (ReferenceEquals(rhs, this)) return true;
             if (ReferenceEquals(rhs, null)) return false;
-            if (ReferenceEquals(Codepoints, rhs.Codepoints)) return true;
-            if (ReferenceEquals(Codepoints, null) || ReferenceEquals(rhs.Codepoints, null)) return false;
-            if (Codepoints.Length != rhs.Codepoints.Length)
-            {
-                return false;
-            }
-            for (int i = 0; i < Codepoints.Length; i++)
-            {
-                if (Codepoints[i] != rhs.Codepoints[i])
-                {
-                    return false;
-                }
-            }
-            return true;
+            return Codepoint == rhs.Codepoint;
         }
         /// <summary>
         /// Indicates whether this expression is the same as the right hand expression
         /// </summary>
         /// <param name="rhs">The expression to compare</param>
         /// <returns>True if the expressions are the same, otherwise false</returns>
-        public override bool Equals(object rhs)
+        public override bool Equals(object? rhs)
             => Equals(rhs as RegexLiteralExpression);
         /// <summary>
         /// Computes a hash code for this expression
@@ -2083,7 +2038,7 @@ namespace TestFA
     /// <summary>
     /// Represents a concatenation between two expression. This has no operator as it is implicit.
     /// </summary>
-    partial class RegexConcatExpression : RegexMultiExpression, IEquatable<RegexConcatExpression>
+    partial class RegexConcatExpression : RegexBinaryExpression, IEquatable<RegexConcatExpression>
     {
         /// <summary>
         /// Indicates whether or not this statement is a single element or not
@@ -2093,27 +2048,21 @@ namespace TestFA
         {
             get
             {
-                return Expressions.Count == 1 && Expressions[0] != null && Expressions[0].IsSingleElement;
+                return ((Left != null && Right == null && Left.IsSingleElement) || (Left == null && Right != null && Right.IsSingleElement));
             }
         }
         /// <summary>
         /// Indicates whether or not this statement is a empty element or not
         /// </summary>
-        public override bool IsEmptyElement => Expressions.Count == 0 || (Expressions.Count == 1 && Expressions[0].IsEmptyElement);
+        public override bool IsEmptyElement => (Left == null || Left.IsEmptyElement) && (Right == null || Right.IsEmptyElement);
         /// <summary>
         /// Creates a new expression with the specified left and right hand sides
         /// </summary>
         /// <param name="expressions">The right expressions</param>
-        public RegexConcatExpression(IList<RegexExpression> expressions)
+        public RegexConcatExpression(RegexExpression? left, RegexExpression? right)
         {
-            for (int i = 0; i < expressions.Count; ++i)
-            {
-                var e = expressions[i];
-                if (e != null && !e.IsEmptyElement)
-                {
-                    Expressions.Add(e);
-                }
-            }
+            Left = left;
+            Right = right;
         }
         /// <summary>
         /// Creates a default instance of the expression
@@ -2132,10 +2081,13 @@ namespace TestFA
         public new RegexConcatExpression Clone()
         {
             var result = new RegexConcatExpression();
-            for (int i = 0; i < Expressions.Count; ++i)
+            if (Left != null)
             {
-                var e = Expressions[i];
-                result.Expressions.Add(e.Clone());
+                result.Left = Left.Clone();
+            }
+            if (Right != null)
+            {
+                result.Right = Right.Clone();
             }
             return result;
         }
@@ -2149,29 +2101,10 @@ namespace TestFA
         {
             if (ReferenceEquals(rhs, this)) return true;
             if (ReferenceEquals(rhs, null)) return false;
-            int i = 0, j = 0;
-            while (i < Expressions.Count && j < rhs.Expressions.Count)
-            {
-                var l = Expressions[i];
-                var r = rhs.Expressions[j];
-                if (l == null)
-                {
-                    ++i;
-                    continue;
-                }
-                if (r == null)
-                {
-                    ++j;
-                    continue;
-                }
-                if (!l.Equals(r))
-                {
-                    return false;
-                }
-                ++i;
-                ++j;
+            if((Left == null && rhs.Left == null)||(Left!=null && Left.Equals(rhs.Left))) {
+                return ((Right == null && rhs.Right == null) || (Right != null && Right.Equals(rhs.Right)));
             }
-            return (i == j);
+            return false;
         }
         /// <summary>
         /// Indicates whether this expression is the same as the right hand expression
@@ -2187,13 +2120,13 @@ namespace TestFA
         public override int GetHashCode()
         {
             var result = 0;
-            for (int i = 0; i < Expressions.Count; ++i)
+            if (Left != null)
             {
-                var e = Expressions[i];
-                if (e != null)
-                {
-                    result ^= e.GetHashCode();
-                }
+                result ^= Left.GetHashCode();
+            }
+            if (Right != null)
+            {
+                result ^= Right.GetHashCode();
             }
             return result;
         }
@@ -2229,17 +2162,32 @@ namespace TestFA
         /// <remarks>Used by ToString()</remarks>
         protected internal override void AppendTo(StringBuilder sb)
         {
-            for (int i = 0; i < Expressions.Count; ++i)
+            if (Left != null)
             {
-                var e = Expressions[i];
-                if (e != null)
+                var oe = Left as RegexOrExpression;
+                if (oe != null)
                 {
-                    var oe = e as RegexOrExpression;
-                    if (null != oe)
-                        sb.Append('(');
-                    e.AppendTo(sb);
-                    if (null != oe)
-                        sb.Append(')');
+                    sb.Append("(");
+                    Left.AppendTo(sb);
+                    sb.Append(")");
+                }
+                else
+                {
+                    Left.AppendTo(sb);
+                }
+            }
+            if (Right != null)
+            {
+                var oe = Right as RegexOrExpression;
+                if (oe != null)
+                {
+                    sb.Append("(");
+                    Right.AppendTo(sb);
+                    sb.Append(")");
+                }
+                else
+                {
+                    Right.AppendTo(sb);
                 }
             }
         }
@@ -2247,27 +2195,33 @@ namespace TestFA
     /// <summary>
     /// Represents an "or" regular expression as indicated by |
     /// </summary>
-    partial class RegexOrExpression : RegexMultiExpression, IEquatable<RegexOrExpression>
+    partial class RegexOrExpression : RegexBinaryExpression, IEquatable<RegexOrExpression>
     {
         /// <summary>
         /// Indicates whether or not this statement is a single element or not
         /// </summary>
         /// <remarks>If false, this statement will be wrapped in parentheses if necessary</remarks>
-        public override bool IsSingleElement => Expressions.Count == 1 && Expressions[0] != null && Expressions[0].IsSingleElement;
+        public override bool IsSingleElement
+        {
+            get
+            {
+                return ((Left != null && Right == null && Left.IsSingleElement) || (Left == null && Right != null && Right.IsSingleElement));
+            }
+        }
         /// <summary>
         /// Indicates whether or not this statement is a empty element or not
         /// </summary>
-        public override bool IsEmptyElement => Expressions.Count == 0 || (Expressions.Count == 1 && Expressions[0].IsEmptyElement);
+        public override bool IsEmptyElement => (Left == null || Left.IsEmptyElement) && (Right == null || Right.IsEmptyElement);
         /// <summary>
         /// Creates a new instance from a list of expressions
         /// </summary>
         /// <param name="expressions">The expressions</param>
         /// <exception cref="ArgumentNullException"><paramref name="expressions"/> was null</exception>
         /// <exception cref="ArgumentException"><paramref name="expressions"/> was empty</exception>
-        public RegexOrExpression(IList<RegexExpression> expressions)
+        public RegexOrExpression(RegexExpression? left, RegexExpression? right)
         {
-            if (expressions == null) throw new ArgumentNullException(nameof(expressions));
-            Expressions.AddRange(expressions);
+            Left = left;
+            Right = right;
         }
 
         /// <summary>
@@ -2283,15 +2237,21 @@ namespace TestFA
         protected internal override void AppendTo(StringBuilder sb)
         {
             bool hasNull = false;
-            for (int i = 0; i < Expressions.Count; ++i)
+            if (Left != null && !Left.IsEmptyElement)
             {
-                var e = Expressions[i];
-                if (e == null) { hasNull = true; continue; }
-                if (i > 0)
-                {
-                    sb.Append("|");
-                }
-                e.AppendTo(sb);
+                Left.AppendTo(sb);
+            } else
+            {
+                hasNull = true;
+            }
+            if(Right != null && !Right.IsEmptyElement)
+            {
+                sb.Append("|");
+                Right.AppendTo(sb);
+                sb.Append(Left.ToString());
+            } else
+            {
+                hasNull = true;
             }
             if (hasNull)
             {
@@ -2311,23 +2271,28 @@ namespace TestFA
         public new RegexOrExpression Clone()
         {
             var result = new RegexOrExpression();
-            bool hasNull = false;
-            for (int i = 0; i < Expressions.Count; ++i)
+            if (Left != null)
             {
-                var e = Expressions[i];
-                if (e != null)
-                {
-                    result.Expressions.Add(e.Clone());
-                }
-                else hasNull = true;
+                result.Left = Left.Clone();
             }
-            if (hasNull)
+            if (Right != null)
             {
-                result.Expressions.Add(null);
+                result.Right = Right.Clone();
             }
             return result;
         }
         #region Value semantics
+        private bool _Equals(RegexOrExpression? rhs)
+        {
+            if (ReferenceEquals(rhs, this)) return true;
+            if (ReferenceEquals(rhs, null)) return false;
+            if ((Left == null && rhs.Left == null) || (Left != null && Left.Equals(rhs.Left)))
+            {
+                return ((Right == null && rhs.Right == null) || (Right != null && Right.Equals(rhs.Right)));
+            }
+            return false;
+
+        }
         /// <summary>
         /// Indicates whether this expression is the same as the right hand expression
         /// </summary>
@@ -2335,11 +2300,10 @@ namespace TestFA
         /// <returns>True if the expressions are the same, otherwise false</returns>
         public bool Equals(RegexOrExpression? rhs)
         {
-            if (ReferenceEquals(rhs, this)) return true;
-            if (ReferenceEquals(rhs, null)) return false;
-            var hl = new HashSet<RegexExpression>(Expressions);
-            var hr = new HashSet<RegexExpression>(rhs.Expressions);
-            return hl.SetEquals(hr);
+            if (_Equals(rhs)) return true;
+            // swap values and check
+            var swapped = new RegexOrExpression(Right, Left);
+            return swapped._Equals(rhs);
         }
         /// <summary>
         /// Indicates whether this expression is the same as the right hand expression
@@ -2355,13 +2319,13 @@ namespace TestFA
         public override int GetHashCode()
         {
             var result = 0;
-            for (int i = 0; i < Expressions.Count; ++i)
+            if (Left != null)
             {
-                var e = Expressions[i];
-                if (e != null)
-                {
-                    result ^= e.GetHashCode();
-                }
+                result ^= Left.GetHashCode();
+            }
+            if (Right != null)
+            {
+                result ^= Right.GetHashCode();
             }
             return result;
         }

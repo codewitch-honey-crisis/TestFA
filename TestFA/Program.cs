@@ -5,6 +5,63 @@ using System.Linq;
 using TestFA;
 namespace TestFA
 {
+    // Add these extensions to your RegexExpression class
+    static class RegexExpressionExtensions
+    {
+        private static Dictionary<RegexExpression, int> _positions = new Dictionary<RegexExpression, int>();
+        private static Dictionary<RegexExpression, bool> _nullable = new Dictionary<RegexExpression, bool>();
+        private static Dictionary<RegexExpression, HashSet<RegexExpression>> _firstPos = new Dictionary<RegexExpression, HashSet<RegexExpression>>();
+        private static Dictionary<RegexExpression, HashSet<RegexExpression>> _lastPos = new Dictionary<RegexExpression, HashSet<RegexExpression>>();
+
+        public static int GetDfaPosition(this RegexExpression expr)
+        {
+            return _positions.TryGetValue(expr, out int pos) ? pos : -1;
+        }
+
+        public static void SetDfaPosition(this RegexExpression expr, int position)
+        {
+            _positions[expr] = position;
+        }
+
+        public static bool GetNullable(this RegexExpression expr)
+        {
+            return _nullable.TryGetValue(expr, out bool nullable) && nullable;
+        }
+
+        public static void SetNullable(this RegexExpression expr, bool nullable)
+        {
+            _nullable[expr] = nullable;
+        }
+
+        public static HashSet<RegexExpression> GetFirstPos(this RegexExpression expr)
+        {
+            if (!_firstPos.TryGetValue(expr, out HashSet<RegexExpression> set))
+            {
+                set = new HashSet<RegexExpression>();
+                _firstPos[expr] = set;
+            }
+            return set;
+        }
+
+        public static HashSet<RegexExpression> GetLastPos(this RegexExpression expr)
+        {
+            if (!_lastPos.TryGetValue(expr, out HashSet<RegexExpression> set))
+            {
+                set = new HashSet<RegexExpression>();
+                _lastPos[expr] = set;
+            }
+            return set;
+        }
+
+        public static void ClearDfaProperties()
+        {
+            _positions.Clear();
+            _nullable.Clear();
+            _firstPos.Clear();
+            _lastPos.Clear();
+        }
+    }
+
     // Adapter approach - works with your existing AST
     class DirectDfaBuilder
     {
@@ -14,14 +71,14 @@ namespace TestFA
         private Dictionary<RegexExpression, HashSet<RegexExpression>> _followPos =
             new Dictionary<RegexExpression, HashSet<RegexExpression>>();
 
-        // Add these properties to your existing RegexExpression class:
-        // public int Position { get; set; } = -1;  // -1 means not assigned
-        // public bool Nullable { get; set; }
-        // public HashSet<RegexExpression> FirstPos { get; set; } = new HashSet<RegexExpression>();
-        // public HashSet<RegexExpression> LastPos { get; set; } = new HashSet<RegexExpression>();
-
         public Dfa BuildDfa(RegexExpression regexAst)
         {
+            // Clear any previous state
+            RegexExpressionExtensions.ClearDfaProperties();
+            _positions.Clear();
+            _followPos.Clear();
+            _positionCounter = 1;
+
             // Step 1: Augment with end marker
             var augmentedAst = AugmentWithEndMarker(regexAst);
 
@@ -42,105 +99,97 @@ namespace TestFA
         {
             // Create end marker - using RegexLiteralExpression with special marker
             _endMarker = new RegexLiteralExpression { Value = "#END#" };
-            _endMarker.Position = _positionCounter++;
+            _endMarker.SetDfaPosition(_positionCounter++);
 
-            var concat = new RegexConcatExpression();
-            concat.Expressions.Add(root);
-            concat.Expressions.Add(_endMarker);
-
+            var concat = new RegexConcatExpression(root,_endMarker);
+           
             return concat;
         }
 
-        private void AssignPositions(RegexExpression node)
+        private void AssignPositions(RegexExpression? node)
         {
             if (node == null) return;
 
             // Assign positions to leaf nodes (literals and character classes)
-            if (IsLeafNode(node) && node.Position == -1)
+            if (IsLeafNode(node) && node.GetDfaPosition() == -1)
             {
-                node.Position = _positionCounter++;
-                _positions[(int)node.Position] = node;
+                node.SetDfaPosition(_positionCounter++);
+                _positions[node.GetDfaPosition()] = node;
             }
 
             // Recursively process child nodes based on your AST structure
             switch (node)
             {
                 case RegexConcatExpression concat:
-                    foreach (var expr in concat.Expressions)
-                        AssignPositions(expr);
+                    AssignPositions(concat.Left);
+                    AssignPositions(concat.Right);
                     break;
 
                 case RegexOrExpression or:
-                    foreach (var expr in or.Expressions)
-                        AssignPositions(expr);
+                    AssignPositions(or.Left);
+                    AssignPositions(or.Right);
                     break;
-
                 case RegexRepeatExpression repeat:
                     AssignPositions(repeat.Expression);
                     break;
 
-                case RegexMultiExpression multi:
-                    foreach (var expr in multi.Expressions)
-                        AssignPositions(expr);
-                    break;
             }
         }
 
         private bool IsLeafNode(RegexExpression node)
         {
             return node is RegexLiteralExpression ||
-                   node is RegexCharsetExpression ||
-                   node is RegexCharsetClassEntry ||
-                   node is RegexCharsetCharEntry ||
-                   node is RegexCharsetRangeEntry;
+                   node is RegexCharsetExpression;
         }
 
-        private void ComputeNodeProperties(RegexExpression node)
+        private void ComputeNodeProperties(RegexExpression? node)
         {
             if (node == null) return;
-
+            RegexExpression?[] exprs;
             // Post-order traversal - compute children first
             switch (node)
             {
                 case RegexConcatExpression concat:
                     // Process all children first
-                    foreach (var expr in concat.Expressions)
-                        ComputeNodeProperties(expr);
+                    ComputeNodeProperties(concat.Left);
+                    ComputeNodeProperties(concat.Right);
 
                     // N-ary concatenation rules
-                    node.Nullable = concat.Expressions.All(e => e.Nullable);
+                    exprs = new RegexExpression?[] { concat.Left, concat.Right };
+                    node.SetNullable(exprs.All(e => e.GetNullable()));
 
                     // FirstPos: union of firstpos of expressions until we hit a non-nullable
-                    foreach (var expr in concat.Expressions)
+                    foreach (var expr in exprs)
                     {
-                        node.FirstPos.UnionWith(expr.FirstPos);
-                        if (!expr.Nullable)
+                        node.GetFirstPos().UnionWith(expr.GetFirstPos());
+                        if (!expr.GetNullable())
                             break;
                     }
 
                     // LastPos: union of lastpos of expressions from right until we hit a non-nullable
-                    for (int i = concat.Expressions.Count - 1; i >= 0; i--)
+                    for (int i = exprs.Length - 1; i >= 0; i--)
                     {
-                        var expr = concat.Expressions[i];
-                        node.LastPos.UnionWith(expr.LastPos);
-                        if (!expr.Nullable)
+                        var expr = exprs[i];
+                        node.GetLastPos().UnionWith(expr.GetLastPos());
+                        if (!expr.GetNullable())
                             break;
                     }
                     break;
 
                 case RegexOrExpression or:
                     // Process all children first
-                    foreach (var expr in or.Expressions)
+                    exprs = new RegexExpression?[] { or.Left, or.Right };
+                    foreach (var expr in exprs)
                         ComputeNodeProperties(expr);
 
                     // N-ary alternation rules
-                    node.Nullable = or.Expressions.Any(e => e.Nullable);
+                    node.SetNullable(exprs.Any(e => e.GetNullable()));
 
                     // FirstPos and LastPos: union of all children
-                    foreach (var expr in or.Expressions)
+                    foreach (var expr in exprs)
                     {
-                        node.FirstPos.UnionWith(expr.FirstPos);
-                        node.LastPos.UnionWith(expr.LastPos);
+                        node.GetFirstPos().UnionWith(expr.GetFirstPos());
+                        node.GetLastPos().UnionWith(expr.GetLastPos());
                     }
                     break;
 
@@ -148,32 +197,26 @@ namespace TestFA
                     ComputeNodeProperties(repeat.Expression);
 
                     // Handle different repeat types
-                    if (repeat.MinOccurs <= 0) // * or {0,n}
+                    if (repeat.MinOccurs <= 0) // *, {0,n}, or ?
                     {
-                        node.Nullable = true;
-                        node.FirstPos.UnionWith(repeat.Expression.FirstPos);
-                        node.LastPos.UnionWith(repeat.Expression.LastPos);
+                        node.SetNullable(true);
+                        node.GetFirstPos().UnionWith(repeat.Expression.GetFirstPos());
+                        node.GetLastPos().UnionWith(repeat.Expression.GetLastPos());
                     }
-                    else if (repeat.MinOccurs == 1 && repeat.MaxOccurs <= 0) // +
+                    else if (repeat.MinOccurs >= 1) // +, {1,n}, {n}
                     {
-                        node.Nullable = repeat.Expression.Nullable;
-                        node.FirstPos.UnionWith(repeat.Expression.FirstPos);
-                        node.LastPos.UnionWith(repeat.Expression.LastPos);
-                    }
-                    else if (repeat.MinOccurs <= 0 && repeat.MaxOccurs <= 0) // ?
-                    {
-                        node.Nullable = true;
-                        node.FirstPos.UnionWith(repeat.Expression.FirstPos);
-                        node.LastPos.UnionWith(repeat.Expression.LastPos);
+                        node.SetNullable(repeat.Expression.GetNullable());
+                        node.GetFirstPos().UnionWith(repeat.Expression.GetFirstPos());
+                        node.GetLastPos().UnionWith(repeat.Expression.GetLastPos());
                     }
                     break;
 
                 case RegexLiteralExpression literal:
                 case RegexCharsetExpression charset:
                     // Leaf nodes
-                    node.Nullable = false;
-                    node.FirstPos.Add(node);
-                    node.LastPos.Add(node);
+                    node.SetNullable(false);
+                    node.GetFirstPos().Add(node);
+                    node.GetLastPos().Add(node);
                     break;
             }
         }
@@ -196,53 +239,44 @@ namespace TestFA
             switch (node)
             {
                 case RegexConcatExpression concat:
-                    // N-ary concatenation: for each adjacent pair of expressions,
-                    // if i in lastpos(left) then firstpos(right) ⊆ followpos(i)
-                    for (int i = 0; i < concat.Expressions.Count - 1; i++)
+                    var left = concat.Left;
+                    var right = concat.Right;
+
+                    foreach (var pos in left.GetLastPos())
                     {
-                        var left = concat.Expressions[i];
-                        var right = concat.Expressions[i + 1];
-
-                        foreach (var pos in left.LastPos)
-                        {
-                            _followPos[pos].UnionWith(right.FirstPos);
-                        }
+                        _followPos[pos].UnionWith(right.GetFirstPos());
                     }
-
-                    // Recursively process all children
-                    foreach (var expr in concat.Expressions)
-                        ComputeFollowPosRecursive(expr);
+                    ComputeFollowPosRecursive(left);
+                    ComputeFollowPosRecursive(right);
+                        
                     break;
 
                 case RegexOrExpression or:
-                    // No followpos rules for alternation itself
-                    foreach (var expr in or.Expressions)
-                        ComputeFollowPosRecursive(expr);
+                    ComputeFollowPosRecursive(or.Left);
+                    ComputeFollowPosRecursive(or.Right);
                     break;
-
                 case RegexRepeatExpression repeat:
                     // Rule 2: If n is star/plus-node and i in lastpos(n),
                     // then all positions in firstpos(n) are in followpos(i)
-                    if (repeat.MaxOccurs != 1) // * or + or {n,m} where m > 1
+                    if (repeat.MaxOccurs != 1) // *, +, or {n,m} where m > 1
                     {
-                        foreach (var pos in node.LastPos)
+                        foreach (var pos in node.GetLastPos())
                         {
-                            _followPos[pos].UnionWith(node.FirstPos);
+                            _followPos[pos].UnionWith(node.GetFirstPos());
                         }
                     }
                     ComputeFollowPosRecursive(repeat.Expression);
                     break;
-
             }
         }
 
         private Dfa ConstructDfa(RegexExpression root)
         {
-            var startState = CreateStateFromPositions(root.FirstPos);
+            var startState = CreateStateFromPositions(root.GetFirstPos());
             var unmarkedStates = new Queue<Dfa>();
             var allStates = new Dictionary<string, Dfa>();
 
-            string startKey = GetStateKey(root.FirstPos);
+            string startKey = GetStateKey(root.GetFirstPos());
             allStates[startKey] = startState;
             unmarkedStates.Enqueue(startState);
 
@@ -340,15 +374,15 @@ namespace TestFA
             {
                 case RegexLiteralExpression literal:
                     // Convert string to character ranges
-                    foreach (char c in literal.Value)
+                    if (literal.Codepoint != -1)
                     {
-                        ranges.Add(new CharRange { Min = c, Max = c });
+                        ranges.Add(new CharRange { Min = literal.Codepoint, Max = literal.Codepoint });
+                        
                     }
                     break;
 
                 case RegexCharsetExpression charset:
                     // Extract ranges from character set
-                    // You'll need to implement this based on your charset structure
                     ranges.AddRange(ExtractCharsetRanges(charset));
                     break;
             }
@@ -392,31 +426,65 @@ namespace TestFA
 
         private string GetStateKey(HashSet<RegexExpression> positions)
         {
-            var sorted = positions.Where(p => p.Position != -1)
-                                .OrderBy(p => p.Position)
-                                .Select(p => p.Position.ToString());
+            var sorted = positions.Where(p => p.GetDfaPosition() != -1)
+                                .OrderBy(p => p.GetDfaPosition())
+                                .Select(p => p.GetDfaPosition().ToString());
             return string.Join(",", sorted);
         }
     }
 
-    // Extensions you'll need to add to your RegexExpression class:
-    /*
-    public abstract partial class RegexExpression
-    {
-        public int Position { get; set; } = -1;
-        public bool Nullable { get; set; }
-        public HashSet<RegexExpression> FirstPos { get; set; } = new HashSet<RegexExpression>();
-        public HashSet<RegexExpression> LastPos { get; set; } = new HashSet<RegexExpression>();
-    }
-    */
     static class Program
     {
         static void Main()
         {
-            var ast = RegexExpression.Parse("foo|fubar");
-            var ddb = new DirectDfaBuilder();
-            var dfa = ddb.BuildDfa(ast);
-            return;
+            try
+            {
+                var ast = RegexExpression.Parse("(foo|fubar)+");
+                var ddb = new DirectDfaBuilder();
+                var dfa = ddb.BuildDfa(ast);
+                dfa.RenderToFile(@"..\..\..\dfa.jpg");
+                Console.WriteLine("DFA construction successful!");
+                Console.WriteLine($"Start state created with {dfa.Transitions.Count} transitions");
+
+                // Test the DFA with some strings
+                TestDfa(dfa, "foo");
+                TestDfa(dfa, "fubar");
+                TestDfa(dfa, "foobar");
+                TestDfa(dfa, "fu");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+        }
+
+        static void TestDfa(Dfa startState, string input)
+        {
+            var currentState = startState;
+
+            foreach (char c in input)
+            {
+                bool found = false;
+                foreach (var transition in currentState.Transitions)
+                {
+                    if (c >= transition.Min && c <= transition.Max)
+                    {
+                        currentState = transition.To;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    Console.WriteLine($"String '{input}': REJECTED (no transition for '{c}')");
+                    return;
+                }
+            }
+
+            bool isAccepted = currentState.Attributes.ContainsKey("IsAccept") &&
+                             (bool)currentState.Attributes["IsAccept"];
+            Console.WriteLine($"String '{input}': {(isAccepted ? "ACCEPTED" : "REJECTED")}");
         }
     }
 }

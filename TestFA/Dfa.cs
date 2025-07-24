@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -11,7 +12,7 @@ namespace TestFA
         public bool Equals(FAAttributes? other)
         {
             if (object.ReferenceEquals(this, other)) return true;
-            if(object.ReferenceEquals(other,null)) return false;
+            if (object.ReferenceEquals(other, null)) return false;
             if (this.Count != other.Count) return false;
             foreach (var attr in this)
             {
@@ -24,8 +25,8 @@ namespace TestFA
         }
         public override bool Equals(object? obj)
         {
-            if(object.ReferenceEquals(this,obj)) return true;
-            if(object.ReferenceEquals(obj,null)) return false;
+            if (object.ReferenceEquals(this, obj)) return true;
+            if (object.ReferenceEquals(obj, null)) return false;
             return Equals(obj as FAAttributes);
         }
         public override int GetHashCode()
@@ -40,7 +41,7 @@ namespace TestFA
                 }
             }
             return result;
-           
+
         }
     }
     /// <summary>
@@ -200,10 +201,38 @@ namespace TestFA
 
     internal class Dfa
     {
+        public IList<Dfa> FillClosure(IList<Dfa> result = null)
+        {
+            if (null == result) result = new List<Dfa>();
+            else if (result.Contains(this)) return result;
+            result.Add(this);
+            foreach (var trn in Transitions)
+            {
+                if (trn.To != null)
+                {
+                    trn.To.FillClosure(result);
+                }
+            }
+            return result;
+        }
         public readonly Dictionary<string, object> Attributes = new Dictionary<string, object>();
         readonly List<FATransition> _transitions = new List<FATransition>(); // TODO: wrap this with IReadOnlyList for a public property, and add AddTransition
         public IReadOnlyList<FATransition> Transitions { get { return _transitions; } }
-        
+        public bool IsAccept
+        {
+            get
+            {
+                object result;
+                if (Attributes.TryGetValue("IsAccept", out result))
+                {
+                    if (result is bool val && val)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
         public void AddTransition(FATransition transition)
         {
             foreach (var trn in _transitions)
@@ -212,6 +241,401 @@ namespace TestFA
                     return; // found
             }
             _transitions.Add(transition);
+        }
+        public IDictionary<Dfa, IList<FARange>> FillInputTransitionRangesGroupedByState(IDictionary<Dfa, IList<FARange>>? result = null)
+        {
+            if (null == result)
+                result = new Dictionary<Dfa, IList<FARange>>();
+
+            foreach (var trns in Transitions)
+            {
+                if (trns.IsEpsilon)
+                {
+                    continue;
+                }
+                IList<FARange> l;
+                if (!result.TryGetValue(trns.To, out l))
+                {
+                    l = new List<FARange>();
+                    result.Add(trns.To, l);
+                }
+                l.Add(new FARange(trns.Min, trns.Max));
+            }
+            foreach (var item in result)
+            {
+                ((List<FARange>)item.Value).Sort((x, y) => { var c = x.Min.CompareTo(y.Min); if (0 != c) return c; return x.Max.CompareTo(y.Max); });
+                _NormalizeSortedRangeList(item.Value);
+            }
+            return result;
+        }
+        static void _NormalizeSortedRangeList(IList<FARange> pairs)
+        {
+            for (int i = 1; i < pairs.Count; ++i)
+            {
+                if (pairs[i - 1].Max + 1 >= pairs[i].Min)
+                {
+                    var nr = new FARange(pairs[i - 1].Min, pairs[i].Max);
+                    pairs[i - 1] = nr;
+                    pairs.RemoveAt(i);
+                    --i; // compensated for by ++i in for loop
+                }
+            }
+        }
+        static IEnumerable<FARange> _InvertRanges(IEnumerable<FARange> ranges)
+        {
+            if (ranges == null)
+            {
+                yield break;
+            }
+            var last = 0x10ffff;
+
+            using (var e = ranges.GetEnumerator())
+            {
+                if (!e.MoveNext())
+                {
+                    FARange range;
+                    range.Min = 0;
+                    range.Max = 0x10ffff;
+                    yield return range;
+                    yield break;
+                }
+                if (e.Current.Min > 0)
+                {
+                    FARange range;
+                    range.Min = 0;
+                    range.Max = e.Current.Min - 1;
+                    yield return range;
+                    last = e.Current.Max;
+                    if (0x10ffff <= last)
+                        yield break;
+                }
+                else if (e.Current.Min == 0)
+                {
+                    last = e.Current.Max;
+                    if (0x10ffff <= last)
+                        yield break;
+                }
+                while (e.MoveNext())
+                {
+                    if (0x10ffff <= last)
+                        yield break;
+                    if (unchecked(last + 1) < e.Current.Min)
+                    {
+                        FARange range;
+                        range.Min = unchecked(last + 1);
+                        range.Max = unchecked((e.Current.Min - 1));
+                        yield return range;
+                    }
+                    last = e.Current.Max;
+                }
+                if (0x10ffff > last)
+                {
+                    FARange range;
+                    range.Min = unchecked((last + 1));
+                    range.Max = 0x10ffff;
+                    yield return range;
+                }
+
+            }
+        }
+        static void _AppendRangeTo(StringBuilder builder, IList<FARange> ranges)
+        {
+            for (int i = 0; i < ranges.Count; ++i)
+            {
+                _AppendRangeTo(builder, ranges, i);
+            }
+        }
+        static void _AppendRangeTo(StringBuilder builder, IList<FARange> ranges, int index)
+        {
+            var first = ranges[index].Min;
+            var last = ranges[index].Max;
+            _AppendRangeCharTo(builder, first);
+            if (0 == last.CompareTo(first)) return;
+            if (last == first + 1) // spit out 1 and 2 length ranges as flat chars
+            {
+                _AppendRangeCharTo(builder, last);
+                return;
+            }
+            else if (last == first + 2)
+            {
+                _AppendRangeCharTo(builder, first + 1);
+                _AppendRangeCharTo(builder, last);
+                return;
+            }
+            builder.Append('-');
+            _AppendRangeCharTo(builder, last);
+        }
+        static void _AppendCharTo(StringBuilder builder, int @char)
+        {
+            switch (@char)
+            {
+                case '.':
+                case '[':
+                case ']':
+                case '^':
+                case '-':
+                case '+':
+                case '?':
+                case '(':
+                case ')':
+                case '\\':
+                    builder.Append('\\');
+                    builder.Append(char.ConvertFromUtf32(@char));
+                    return;
+                case '\t':
+                    builder.Append("\\t");
+                    return;
+                case '\n':
+                    builder.Append("\\n");
+                    return;
+                case '\r':
+                    builder.Append("\\r");
+                    return;
+                case '\0':
+                    builder.Append("\\0");
+                    return;
+                case '\f':
+                    builder.Append("\\f");
+                    return;
+                case '\v':
+                    builder.Append("\\v");
+                    return;
+                case '\b':
+                    builder.Append("\\b");
+                    return;
+                default:
+                    var s = char.ConvertFromUtf32(@char);
+                    if (!char.IsLetterOrDigit(s, 0) && !char.IsSeparator(s, 0) && !char.IsPunctuation(s, 0) && !char.IsSymbol(s, 0))
+                    {
+                        if (s.Length == 1)
+                        {
+                            builder.Append("\\u");
+                            builder.Append(unchecked((ushort)@char).ToString("x4"));
+                        }
+                        else
+                        {
+                            builder.Append("\\U");
+                            builder.Append(@char.ToString("x8"));
+                        }
+
+                    }
+                    else
+                        builder.Append(s);
+                    break;
+            }
+        }
+
+        static void _AppendRangeCharTo(StringBuilder builder, int rangeChar)
+        {
+            switch (rangeChar)
+            {
+                case '.':
+                case '[':
+                case ']':
+                case '^':
+                case '-':
+                case '(':
+                case ')':
+                case '{':
+                case '}':
+                case '\\':
+                    builder.Append('\\');
+                    builder.Append(char.ConvertFromUtf32(rangeChar));
+                    return;
+                case '\t':
+                    builder.Append("\\t");
+                    return;
+                case '\n':
+                    builder.Append("\\n");
+                    return;
+                case '\r':
+                    builder.Append("\\r");
+                    return;
+                case '\0':
+                    builder.Append("\\0");
+                    return;
+                case '\f':
+                    builder.Append("\\f");
+                    return;
+                case '\v':
+                    builder.Append("\\v");
+                    return;
+                case '\b':
+                    builder.Append("\\b");
+                    return;
+                default:
+                    var s = char.ConvertFromUtf32(rangeChar);
+                    if (!char.IsLetterOrDigit(s, 0) && !char.IsSeparator(s, 0) && !char.IsPunctuation(s, 0) && !char.IsSymbol(s, 0))
+                    {
+                        if (s.Length == 1)
+                        {
+                            builder.Append("\\u");
+                            builder.Append(unchecked((ushort)rangeChar).ToString("x4"));
+                        }
+                        else
+                        {
+                            builder.Append("\\U");
+                            builder.Append(rangeChar.ToString("x8"));
+                        }
+
+                    }
+                    else
+                        builder.Append(s);
+                    break;
+            }
+        }
+        static string _EscapeLabel(string label)
+        {
+            if (string.IsNullOrEmpty(label)) return label;
+
+            string result = label.Replace("\\", @"\\");
+            result = result.Replace("\"", "\\\"");
+            result = result.Replace("\n", "\\n");
+            result = result.Replace("\r", "\\r");
+            result = result.Replace("\0", "\\0");
+            result = result.Replace("\v", "\\v");
+            result = result.Replace("\t", "\\t");
+            result = result.Replace("\f", "\\f");
+            return result;
+        }
+        void _WriteDotTo(TextWriter writer)
+        {
+            writer.WriteLine("digraph FA {");
+            writer.WriteLine("rankdir=LR");
+            writer.WriteLine("node [shape=circle]");
+            var closure = FillClosure();
+            var accepting = new List<Dfa>();
+            var finals = new List<Dfa>();
+            foreach (var ffa in closure)
+            {
+                if (ffa.IsAccept)
+                {
+                    accepting.Add(ffa);
+                }
+                else if (ffa.Transitions.Count == 0)
+                {
+                    finals.Add(ffa);
+                }
+            }
+            int i = 0;
+            foreach (var ffa in closure)
+            {
+                var rngGrps = ffa.FillInputTransitionRangesGroupedByState();
+                foreach (var rngGrp in rngGrps)
+                {
+                    var di = closure.IndexOf(rngGrp.Key);
+                    writer.Write("q");
+                    writer.Write(i);
+                    writer.Write("->q");
+                    writer.Write(di.ToString());
+                    writer.Write(" [label=\"");
+                    var sb = new StringBuilder();
+                    //var notRanges = new List<FARange>(FARange.ToNotRanges(rngGrp.Value));
+                    var notRanges = new List<FARange>(_InvertRanges(rngGrp.Value));
+                    if (notRanges.Count * 1.5 > rngGrp.Value.Count)
+                    {
+                        _AppendRangeTo(sb, rngGrp.Value);
+                    }
+                    else
+                    {
+                        if (notRanges.Count == 0)
+                        {
+                            sb.Append(".\\n");
+                        }
+                        else
+                        {
+                            sb.Append("^");
+                            _AppendRangeTo(sb, notRanges);
+                        }
+                    }
+                    if (sb.Length != 1 || " " == sb.ToString())
+                    {
+                        writer.Write('[');
+                        if (sb.Length > 16)
+                        {
+                            sb.Length = 16;
+                            sb.Append("...");
+                        }
+                        writer.Write(_EscapeLabel(sb.ToString()));
+                        writer.Write(']');
+                    }
+                    else
+                    {
+                        writer.Write(_EscapeLabel(sb.ToString()));
+                    }
+                    writer.WriteLine("\"]");
+                    
+                }
+                ++i;
+            }
+            var delim = "";
+            if (0 < accepting.Count)
+            {
+                foreach (var ntfa in accepting)
+                {
+                        writer.Write(delim);
+                        writer.Write("q");
+                        writer.Write(closure.IndexOf(ntfa));
+                        delim = ",";
+                    
+                }
+                if (delim != "")
+                {
+                    writer.WriteLine(" [shape=doublecircle]");
+                }
+            }
+            writer.WriteLine("}");
+        }
+        public void RenderToFile(string filename)
+        {
+            string args = "-T";
+            string ext = Path.GetExtension(filename);
+            if (0 == string.Compare(".dot",
+                ext,
+                StringComparison.InvariantCultureIgnoreCase))
+            {
+                using (var writer = new StreamWriter(filename, false))
+                {
+                    _WriteDotTo(writer);
+                    return;
+                }
+            }
+            else if (0 == string.Compare(".png",
+                ext,
+                StringComparison.InvariantCultureIgnoreCase))
+                args += "png";
+            else if (0 == string.Compare(".jpg",
+                ext,
+                StringComparison.InvariantCultureIgnoreCase))
+                args += "jpg";
+            else if (0 == string.Compare(".bmp",
+                ext,
+                StringComparison.InvariantCultureIgnoreCase))
+                args += "bmp";
+            else if (0 == string.Compare(".svg",
+                ext,
+                StringComparison.InvariantCultureIgnoreCase))
+                args += "svg";
+            args += " -Gdpi=300";
+            args += " -o\"" + filename + "\"";
+
+            var psi = new ProcessStartInfo("dot", args)
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardInput = true
+            };
+            using (var proc = Process.Start(psi))
+            {
+                if (proc == null)
+                {
+                    throw new NotSupportedException(
+                        "Graphviz \"dot\" application is either not installed or not in the system PATH");
+                }
+                _WriteDotTo(proc.StandardInput);
+                proc.StandardInput.Close();
+                proc.WaitForExit();
+            }
         }
     }
 }
