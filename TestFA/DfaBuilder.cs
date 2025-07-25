@@ -6,7 +6,7 @@ using System.Linq;
 namespace TestFA
 {
     // Dr. Robert van Engelen's lazy DFA construction based on his email correspondence
-    class DfaBuilder
+    static class DfaBuilder
     {
         public static Dfa BuildDfa(RegexExpression regexAst)
         {
@@ -116,9 +116,6 @@ namespace TestFA
 
                 var augmentedDisjunction = new RegexConcatExpression(disjunction, endMarker);
                 augmentedDisjunctions.Add(augmentedDisjunction);
-
-                // Debug output to verify correct assignment
-                Debug.WriteLine($"Disjunction {acceptSymbol}: EndMarker={endMarker.GetHashCode()}, AcceptSymbol={acceptSymbol}");
 
                 acceptSymbol++;
             }

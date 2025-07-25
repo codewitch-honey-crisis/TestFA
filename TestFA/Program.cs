@@ -48,12 +48,9 @@ namespace TestFA
 
                 // Test the DFA with some strings
                 TestDfa(dfa, "aaabababb");
-                //TestDfa(dfa, "/* foo */");
-                //TestDfa(dfa, "fubar");
-                //TestDfa(dfa, "foobar");
-                //TestDfa(dfa, "fu");
-                //TestDfa(dfa, "fo");
-
+                TestDfa(dfa, "/* foo */");
+                TestDfa(dfa, "fubar");
+                TestDfa(dfa, "hello world!");
             }
             catch (Exception ex)
             {
@@ -98,7 +95,7 @@ namespace TestFA
 
             if (isAccepted)
             {
-                Console.WriteLine($"ACCEPTED");
+                Console.WriteLine($"ACCEPTED: {currentState.AcceptSymbol}");
                
             }
             else
@@ -107,62 +104,6 @@ namespace TestFA
             }
         }
 
-        
-        // Helper method to extract positions from state
-        private static HashSet<RegexExpression> GetPositionsFromState(Dfa state)
-        {
-            var positions = (List<RegexExpression>)state.Attributes["Positions"];
-            return new HashSet<RegexExpression>(positions);
-        }
-        static void TestDfa2(Dfa startState, string input)
-        {
-            var capturesNamed = new Dictionary<string, string>();
-            var capturesOrdinal = new Dictionary<int, string>();
-            var captureStack = new Stack<(int groupNum, string name, int startIndex)>();
-            var currentState = startState;
-
-           
-            for (int i = 0; i < input.Length; i++)
-            {
-                char c = input[i];
-                bool found = false;
-
-                foreach (var transition in currentState.Transitions)
-                {
-                    if (c >= transition.Min && c <= transition.Max)
-                    {
-                        // IMPORTANT: Handle capture events BEFORE updating currentState
-                        // but AFTER consuming the character (so at position i + 1)
-                        var nextState = transition.To;
-                        
-                        // Now update the current state
-                        currentState = nextState;
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found)
-                {
-                    Console.WriteLine($"String '{input}': REJECTED (no transition for '{c}')");
-                    return;
-                }
-            }
-
-            bool isAccepted = currentState.Attributes.ContainsKey("IsAccept") &&
-                              (bool)currentState.Attributes["IsAccept"];
-
-            if (isAccepted)
-            {
-                Console.WriteLine($"String '{input}': ACCEPTED");
-
-             
-
-            }
-            else
-            {
-                Console.WriteLine($"String '{input}': REJECTED");
-            }
-        }
+ 
     }
 }
