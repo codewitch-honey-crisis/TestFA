@@ -317,7 +317,45 @@ namespace TestFA
                 yield return ch;
             }
         }
-
+        static RegexExpression _ExpandRepeats(RegexExpression start)
+        {
+            start = start.Clone();
+            start.Visit((parent, expr, index, level) =>
+            {
+                if (expr is RegexRepeatExpression repeat)
+                {
+                    expr = repeat.ExpandRepeats();
+                    if (parent is RegexUnaryExpression unary)
+                    {
+                        unary.Expression = expr;
+                    }
+                    else if (parent is RegexBinaryExpression binary)
+                    {
+                        if (index == 0)
+                        {
+                            binary.Left = expr;
+                        }
+                        else
+                        {
+                            binary.Right = expr;
+                        }
+                    }
+                }
+                return true;
+            });
+            return start;
+        }
+        public string ToString(string format)
+        {
+            if(format=="x")
+            {
+                return _ExpandRepeats(this).ToString();
+            } else if(string.IsNullOrEmpty(format))
+            {
+                return this.ToString();
+            }
+            throw new FormatException($"Unrecognized format specifier \"{format}\".");
+        }
         private bool _Visit(RegexExpression parent, RegexVisitAction action, int childIndex, int level)
         {
             if (action(parent, this, childIndex, level))
@@ -2637,7 +2675,49 @@ namespace TestFA
                 sb.Append('?');
             }
         }
+        public RegexExpression ExpandRepeats()
+        {
+            if ((MinOccurs < 2 && MaxOccurs<=MinOccurs) || Expression == null || Expression.IsEmptyElement)
+            {
+                return this;
+            }
 
+            // Handle fixed repeats (minOccurs == maxOccurs)
+            if (MinOccurs == MaxOccurs)
+            {
+                var exprs = new List<RegexExpression>();
+                for (int i = 0; i < MinOccurs; ++i)
+                {
+                    exprs.Add(this.Expression.Clone());
+                }
+                return RegexConcatExpression.CreateChain(exprs.ToArray());
+            }
+
+            // Handle variable repeats (minOccurs < maxOccurs, both > 1)
+            // Create disjunction: minOccurs copies | (minOccurs+1) copies | ... | maxOccurs copies
+            var alternatives = new List<RegexExpression>();
+
+            for (int count = MinOccurs; count <= MaxOccurs; ++count)
+            {
+                var exprs = new List<RegexExpression>();
+                for (int i = 0; i < count; ++i)
+                {
+                    var expr = this.Expression;
+                    if (expr is RegexRepeatExpression repeat)
+                    {
+                        expr = repeat.ExpandRepeats();
+                    } else
+                    {
+                        expr = expr.Clone();
+                    }
+                    exprs.Add(expr);
+                }
+                alternatives.Add(RegexConcatExpression.CreateChain(exprs.ToArray()));
+            }
+
+            // Create OR expression from all alternatives
+            return RegexOrExpression.CreateChain(alternatives.ToArray());
+        }
         /// <summary>
         /// Creates a new copy of this expression
         /// </summary>

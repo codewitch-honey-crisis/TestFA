@@ -26,10 +26,12 @@ namespace TestFA
                 var ccomment = @"\/\*([^\*]|\*+[^\/])*\*\/";
                 var ccommentLazy = @"\/\*(.|\n)*?\*\/";
                 var test1 = "(?<baz>foo|fubar)+";
-                var test2 = "(a|b)*?bb";
+                var test2 = "(a|b)*?(b{2}){1,3}";
                 var test3 = "hello world!";
                 //var ast = RegexExpression.Parse($"({ccommentLazy})|({test2})|({test3})");
                 //var ast = RegexExpression.Parse(test3);
+                var test2x = RegexExpression.Parse(test2).ToString("x");
+                Console.WriteLine($"{test2} expanded is {test2x}");
                 var ast = RegexExpression.Parse(test2);
                 Console.WriteLine(ast);
                 ast.Visit((parent, expr, index, level) =>

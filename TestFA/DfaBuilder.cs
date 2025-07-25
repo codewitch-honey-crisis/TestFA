@@ -10,6 +10,7 @@ namespace TestFA
     {
         public static Dfa BuildDfa(RegexExpression regexAst)
         {
+            regexAst = RegexExpression.Parse(regexAst.ToString("x"))!;
             int positionCounter = 1;
             RegexTerminatorExpression endMarker=null;
             int[] points;
@@ -384,6 +385,7 @@ namespace TestFA
                 case RegexRepeatExpression repeat:
                     if (repeat.Expression != null && !repeat.Expression.IsEmptyElement)
                     {
+                        
                         bool canRepeat = (repeat.MinOccurs == -1 || repeat.MinOccurs == 0) ||
                                         (repeat.MinOccurs == 1 && (repeat.MaxOccurs == -1 || repeat.MaxOccurs == 0)) ||
                                         (repeat.MaxOccurs > 1 || repeat.MaxOccurs == -1);
