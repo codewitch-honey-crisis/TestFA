@@ -3,6 +3,28 @@ using System.Collections.Generic;
 
 namespace TestFA
 {
+	struct FAMatch
+	{
+		long Position { get; set; } = 0;
+		string GroupName { get; set; } = null;
+		int GroupIndex { get; set; } = -1;
+		string Value { get; set; } = string.Empty;
+
+		public FAMatch(long position, string groupName, string value)
+		{
+			Position = position;
+			GroupName = groupName;
+			GroupIndex = -1;
+			Value = value;
+		}
+        public FAMatch(long position, int groupIndex, string value)
+        {
+            Position = position;
+            GroupName = null;
+            GroupIndex = groupIndex;
+            Value = value;
+        }
+    }
 	/// <summary>
 	/// Represents a range of codepoints
 	/// </summary>

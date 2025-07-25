@@ -331,7 +331,7 @@ namespace TestFA
                 if (binary != null)
                 {
                     int i = 0;
-                    if(binary.Left!=null)
+                    if (binary.Left != null)
                     {
                         binary.Left._Visit(this, action, i++, level + 1);
                     }
@@ -344,7 +344,7 @@ namespace TestFA
             }
             return false;
         }
-        
+
         /// <summary>
         /// Visits each element in the AST
         /// </summary>
@@ -385,6 +385,10 @@ namespace TestFA
             AppendTo(result);
             return result.ToString();
         }
+        public Dfa ToDfa()
+        {
+            return DfaBuilder.BuildDfa(this);
+        }
         /// <summary>
         /// Parses a regular expression from the specified string
         /// </summary>
@@ -401,6 +405,8 @@ namespace TestFA
 
             RegexExpression? result = null, next = null;
             int ich;
+            bool cap;
+            string nmgrp=null;
             pc.EnsureStarted();
             var position = pc.Position;
             while (true)
@@ -418,7 +424,7 @@ namespace TestFA
                             result = nset;
                         else
                         {
-                            result = new RegexConcatExpression(result, nset );
+                            result = new RegexConcatExpression(result, nset);
                             result.SetLocation(position);
                         }
                         position = pc.Position;
@@ -468,9 +474,9 @@ namespace TestFA
                             default:
                                 if (-1 != (ich = _ParseEscapePart(pc)))
                                 {
-                                    
-                                    next = new RegexLiteralExpression( ich );
-                                    
+
+                                    next = new RegexLiteralExpression(ich);
+
                                 }
                                 else
                                 {
@@ -486,7 +492,7 @@ namespace TestFA
                         }
                         if (null != result)
                         {
-                            result = new RegexConcatExpression(result, next );
+                            result = new RegexConcatExpression(result, next);
                             result.SetLocation(position);
                         }
                         else
@@ -498,15 +504,39 @@ namespace TestFA
                     case '(':
                         pc.Advance();
                         pc.Expecting();
+                        cap = true;
+                        if(pc.Codepoint=='?')
+                        {
+                            pc.Advance();
+                            if(pc.Codepoint==':')
+                            {
+                                pc.Advance();
+                                pc.Expecting();
+                                cap = false;
+                            } else
+                            {
+                                pc.Expecting('<');
+                                pc.Advance();
+                                pc.CaptureBuffer.Clear();
+                                pc.TryReadUntil('>', false);
+                                pc.Advance();
+                                nmgrp = pc.CaptureBuffer.ToString();
+                                if(nmgrp.Length==0)
+                                {
+                                    nmgrp = null;
+                                }
+                            }
+                        }
                         next = _Parse(pc);
                         pc.Expecting(')');
                         pc.Advance();
                         next = _ParseModifier(next, pc);
+                        
                         if (null == result)
                             result = next;
                         else
                         {
-                            result = new RegexConcatExpression( result, next );
+                            result = new RegexConcatExpression(result, next);
                             result.SetLocation(position);
                         }
                         position = pc.Position;
@@ -515,12 +545,12 @@ namespace TestFA
                         if (-1 != pc.Advance())
                         {
                             next = _Parse(pc);
-                            result = new RegexOrExpression(result, next );
+                            result = new RegexOrExpression(result, next);
                             result.SetLocation(position);
                         }
                         else
                         {
-                            result = new RegexOrExpression(result, null );
+                            result = new RegexOrExpression(result, null);
                             result.SetLocation(position);
                         }
                         position = pc.Position;
@@ -557,10 +587,10 @@ namespace TestFA
                         break;
                     default:
                         ich = pc.Codepoint;
-                        
-                        next = new RegexLiteralExpression(ich );
+
+                        next = new RegexLiteralExpression(ich);
                         next.SetLocation(position);
-                        
+
                         pc.Advance();
                         if (next != null)
                         {
@@ -572,7 +602,7 @@ namespace TestFA
                         {
                             if (next != null)
                             {
-                                result = new RegexConcatExpression(result, next );
+                                result = new RegexConcatExpression(result, next);
                             }
                             result.SetLocation(position);
                         }
@@ -731,20 +761,24 @@ namespace TestFA
         static RegexExpression _ParseModifier(RegexExpression expr, StringCursor pc)
         {
             var position = pc.Position;
+            RegexRepeatExpression? rep = null;
             switch (pc.Codepoint)
             {
                 case '*':
-                    expr = new RegexRepeatExpression(expr);
+                    rep = new RegexRepeatExpression(expr);
+                    expr = rep;
                     expr.SetLocation(position);
                     pc.Advance();
                     break;
                 case '+':
-                    expr = new RegexRepeatExpression(expr, 1);
+                    rep= new RegexRepeatExpression(expr, 1);
+                    expr = rep;
                     expr.SetLocation(position);
                     pc.Advance();
                     break;
                 case '?':
-                    expr = new RegexRepeatExpression(expr, 0, 1);
+                    rep = new RegexRepeatExpression(expr, 0, 1);
+                    expr = rep;
                     expr.SetLocation(position);
                     pc.Advance();
                     break;
@@ -777,9 +811,15 @@ namespace TestFA
                     else { max = min; }
                     pc.Expecting('}');
                     pc.Advance();
-                    expr = new RegexRepeatExpression(expr, min, max);
+                    rep = new RegexRepeatExpression(expr, min, max);
+                    expr = rep;
                     expr.SetLocation(position);
                     break;
+            }
+            if (pc.Codepoint == '?' && rep!=null)
+            {
+                rep.IsLazy = true;
+                pc.Advance();
             }
             return expr;
         }
@@ -1261,7 +1301,7 @@ namespace TestFA
 #if FALIB
 	public
 #endif
-    partial class RegexTerminatorExpression : RegexExpression, IEquatable<RegexTerminatorExpression>
+    partial class RegexTerminatorExpression : RegexExpression
     {
         public override bool IsLeaf => true;
         /// <summary>
@@ -1273,7 +1313,7 @@ namespace TestFA
         /// Indicates whether or not this statement is a empty element or not
         /// </summary>
         public override bool IsEmptyElement => false;
-        
+
         /// <summary>
         /// Creates a terminator expression with the specified codepoint
         /// </summary>
@@ -1306,62 +1346,11 @@ namespace TestFA
             return new RegexTerminatorExpression();
         }
 
-        #region Value semantics
-        /// <summary>
-        /// Indicates whether this expression is the same as the right hand expression
-        /// </summary>
-        /// <param name="rhs">The expression to compare</param>
-        /// <returns>True if the expressions are the same, otherwise false</returns>
-        public bool Equals(RegexTerminatorExpression? rhs)
-        {
-            if (ReferenceEquals(rhs, null)) return false;
-            if (Position != rhs.Position) return false;
-            return true;
-        }
-        /// <summary>
-        /// Indicates whether this expression is the same as the right hand expression
-        /// </summary>
-        /// <param name="rhs">The expression to compare</param>
-        /// <returns>True if the expressions are the same, otherwise false</returns>
-        public override bool Equals(object? rhs)
-            => Equals(rhs as RegexTerminatorExpression);
-        /// <summary>
-        /// Computes a hash code for this expression
-        /// </summary>
-        /// <returns>A hash code for this expression</returns>
-        public override int GetHashCode()
-            => 0;
-        /// <summary>
-        /// Indicates whether or not two expression are the same
-        /// </summary>
-        /// <param name="lhs">The left hand expression to compare</param>
-        /// <param name="rhs">The right hand expression to compare</param>
-        /// <returns>True if the expressions are the same, otherwise false</returns>
-        public static bool operator ==(RegexTerminatorExpression lhs, RegexTerminatorExpression rhs)
-        {
-            if (ReferenceEquals(lhs, null)) return false;
-            return true;
-        }
-        /// <summary>
-        /// Indicates whether or not two expression are different
-        /// </summary>
-        /// <param name="lhs">The left hand expression to compare</param>
-        /// <param name="rhs">The right hand expression to compare</param>
-        /// <returns>True if the expressions are different, otherwise false</returns>
-        public static bool operator !=(RegexTerminatorExpression lhs, RegexTerminatorExpression rhs)
-        {
-            if (ReferenceEquals(lhs, null)) return true;
-            return false;
-        }
-        #endregion
-
     }
     /// <summary>
     /// Represents a binary expression
     /// </summary>
-#if FALIB
-	public
-#endif
+
     abstract partial class RegexBinaryExpression : RegexExpression
     {
         /// <summary>
@@ -1373,9 +1362,6 @@ namespace TestFA
     /// <summary>
     /// Represents an expression with a single target expression
     /// </summary>
-#if FALIB
-	public
-#endif
 
     abstract partial class RegexUnaryExpression : RegexExpression
     {
@@ -1385,12 +1371,10 @@ namespace TestFA
         public RegexExpression? Expression { get; set; } = null;
 
     }
+
     /// <summary>
     /// Represents a single character literal
     /// </summary>
-#if FALIB
-	public
-#endif
     partial class RegexLiteralExpression : RegexExpression, IEquatable<RegexLiteralExpression>
     {
         /// <summary>
@@ -1451,6 +1435,15 @@ namespace TestFA
         /// </summary>
         public RegexLiteralExpression() { }
 
+        public static RegexExpression CreateString(IEnumerable<char> value)
+        {
+            var exprs = new List<RegexLiteralExpression>();
+            foreach(var cp in ToUtf32(value))
+            {
+                exprs.Add(new RegexLiteralExpression(cp));
+            }
+            return RegexConcatExpression.CreateChain(exprs.ToArray());
+        }
         /// <summary>
         /// Appends the textual representation to a <see cref="StringBuilder"/>
         /// </summary>
@@ -1465,8 +1458,7 @@ namespace TestFA
             AppendEscapedChar(char.ConvertFromUtf32(Codepoint), sb);
             
         }
-
-
+       
         /// <summary>
         /// Creates a new copy of this expression
         /// </summary>
@@ -1507,7 +1499,7 @@ namespace TestFA
         /// </summary>
         /// <returns>A hash code for this expression</returns>
         public override int GetHashCode()
-            => Value != null ? Value.GetHashCode() : 0;
+            => Position.GetHashCode() ^ ((Value != null) ? Value.GetHashCode() : 0);
         /// <summary>
         /// Indicates whether or not two expression are the same
         /// </summary>
@@ -2116,6 +2108,7 @@ namespace TestFA
         public override int GetHashCode()
         {
             var result = HasNegatedRanges.GetHashCode();
+            result ^= Position.GetHashCode();
             for (int ic = Entries.Count, i = 0; i < ic; ++i)
                 result ^= Entries[i].GetHashCode();
             return result;
@@ -2179,6 +2172,33 @@ namespace TestFA
         /// Creates a default instance of the expression
         /// </summary>
         public RegexConcatExpression() { }
+
+        public static RegexExpression CreateChain(params RegexExpression[] exprs)
+        {
+            var result = new RegexConcatExpression();
+            if (exprs.Length == 0) return result;
+            if (exprs.Length == 1) { return exprs[0]; }
+            var current = result;
+            for (int i = 0; i < exprs.Length; i++)
+            {
+                if (current.Left == null)
+                {
+                    current.Left = exprs[i];
+                }
+                else if (current.Right == null)
+                {
+                    if (i < exprs.Length - 1)
+                    {
+                        current.Right = new RegexConcatExpression(exprs[i], null);
+                        current = (RegexConcatExpression)current.Right;
+                    } else
+                    {
+                        current.Right = exprs[i];
+                    }
+                }
+            }
+            return result;
+        }
         /// <summary>
         /// Creates a new copy of this expression
         /// </summary>
@@ -2231,7 +2251,7 @@ namespace TestFA
         /// <returns>A hash code for this expression</returns>
         public override int GetHashCode()
         {
-            var result = 0;
+            var result = Position.GetHashCode();
             if (Left != null)
             {
                 result ^= Left.GetHashCode();
@@ -2279,7 +2299,7 @@ namespace TestFA
                 var oe = Left as RegexOrExpression;
                 if (oe != null)
                 {
-                    sb.Append("(");
+                    sb.Append("(?:");
                     Left.AppendTo(sb);
                     sb.Append(")");
                 }
@@ -2293,7 +2313,7 @@ namespace TestFA
                 var oe = Right as RegexOrExpression;
                 if (oe != null)
                 {
-                    sb.Append("(");
+                    sb.Append("(?:");
                     Right.AppendTo(sb);
                     sb.Append(")");
                 }
@@ -2340,7 +2360,33 @@ namespace TestFA
         /// Creates a default instance of the expression
         /// </summary>
         public RegexOrExpression() { }
-
+        public static RegexExpression CreateChain(params RegexExpression[] exprs)
+        {
+            var result = new RegexOrExpression();
+            if (exprs.Length == 0) return result;
+            if (exprs.Length == 1) { return exprs[0]; }
+            var current = result;
+            for (int i = 0; i < exprs.Length; i++)
+            {
+                if (current.Left == null)
+                {
+                    current.Left = exprs[i];
+                }
+                else if (current.Right == null)
+                {
+                    if (i < exprs.Length - 1)
+                    {
+                        current.Right = new RegexOrExpression(exprs[i], null);
+                        current = (RegexOrExpression)current.Right;
+                    }
+                    else
+                    {
+                        current.Right = exprs[i];
+                    }
+                }
+            }
+            return result;
+        }
         /// <summary>
         /// Appends the textual representation to a <see cref="StringBuilder"/>
         /// </summary>
@@ -2430,7 +2476,7 @@ namespace TestFA
         /// <returns>A hash code for this expression</returns>
         public override int GetHashCode()
         {
-            var result = 0;
+            var result = Position.GetHashCode();
             if (Left != null)
             {
                 result ^= Left.GetHashCode();
@@ -2489,11 +2535,12 @@ namespace TestFA
         /// <param name="expression">The target expression</param>
         /// <param name="minOccurs">The minimum number of times the target expression can occur or -1</param>
         /// <param name="maxOccurs">The maximum number of times the target expression can occur or -1</param>
-        public RegexRepeatExpression(RegexExpression expression, int minOccurs = -1, int maxOccurs = -1)
+        public RegexRepeatExpression(RegexExpression? expression, int minOccurs = -1, int maxOccurs = -1, bool isLazy = false)
         {
             Expression = expression;
             MinOccurs = minOccurs;
             MaxOccurs = maxOccurs;
+            IsLazy = isLazy;
         }
         /// <summary>
         /// Creates a default instance of the expression
@@ -2509,15 +2556,23 @@ namespace TestFA
         public int MaxOccurs { get; set; } = -1; // kleene by default
 
         /// <summary>
+        /// Indicates whether or not this is a lazy match
+        /// </summary>
+        public bool IsLazy { get; set; } = false;
+        /// <summary>
         /// Appends the textual representation to a <see cref="StringBuilder"/>
         /// </summary>
         /// <param name="sb">The string builder to use</param>
         /// <remarks>Used by ToString()</remarks>
         protected internal override void AppendTo(StringBuilder sb)
         {
-            var ise = null != Expression && Expression.IsSingleElement;
+            if(Expression == null || Expression.IsEmptyElement)
+            {
+                return;
+            }
+            var ise = Expression.IsSingleElement;
             if (!ise)
-                sb.Append('(');
+                sb.Append("(?:");
             if (null != Expression)
                 Expression.AppendTo(sb);
             if (!ise)
@@ -2577,6 +2632,10 @@ namespace TestFA
                     sb.Append('}');
                     break;
             }
+            if(IsLazy)
+            {
+                sb.Append('?');
+            }
         }
 
         /// <summary>
@@ -2591,7 +2650,7 @@ namespace TestFA
         /// <returns>A new copy of this expression</returns>
         public new RegexRepeatExpression Clone()
         {
-            return new RegexRepeatExpression(Expression, MinOccurs, MaxOccurs);
+            return new RegexRepeatExpression(Expression, MinOccurs, MaxOccurs, IsLazy);
         }
 
         /// <summary>
@@ -2604,6 +2663,7 @@ namespace TestFA
             if (ReferenceEquals(rhs, this)) return true;
             if (ReferenceEquals(rhs, null)) return false;
             if (Position != rhs.Position) return false;
+            if(IsLazy!=rhs.IsLazy) return false;
             if (Equals(Expression, rhs.Expression))
             {
                 var lmio = Math.Max(0, MinOccurs);
@@ -2627,7 +2687,7 @@ namespace TestFA
         /// <returns>A hash code for this expression</returns>
         public override int GetHashCode()
         {
-            var result = MinOccurs ^ MaxOccurs;
+            var result = Position.GetHashCode() ^ Math.Max(MinOccurs,0) ^ Math.Max(MaxOccurs,0) ^ IsLazy.GetHashCode();
             if (null != Expression)
                 return result ^ Expression.GetHashCode();
             return result;

@@ -8,7 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="DfaBuilder.v1.cs" />
+    <Compile Remove="DfaBuilder.v2.cs" />
     <Compile Remove="DfaBuilder2.cs" />
+    <Compile Remove="DfaBuilder3.cs" />
+    <Compile Remove="DfaBuilder5.cs" />
   </ItemGroup>
 
 </Project>

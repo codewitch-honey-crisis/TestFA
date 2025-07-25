@@ -5,8 +5,34 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
+using TestFA;
+
+
+
 namespace TestFA
 {
+    public class FACaptureEvent
+    {
+        public string? Name { get; set; } = null;
+        public int Index { get; set; } = 0;
+        public bool IsStart { get; set; } = true;
+        public FACaptureEvent()
+        {
+
+        }
+        public FACaptureEvent(string name)
+        {
+            Name = name;
+            Index = 0;
+            IsStart = true;
+        }
+        public FACaptureEvent(int index)
+        {
+            Name = null;
+            Index = index;
+            IsStart = true;
+        }
+    }
     public class FAAttributes : Dictionary<string, object>, IEquatable<FAAttributes>
     {
         public bool Equals(FAAttributes? other)
@@ -198,8 +224,9 @@ namespace TestFA
         }
     }
 
-    internal class Dfa
+    internal partial class Dfa
     {
+
         public IList<Dfa> FillClosure(IList<Dfa> result = null)
         {
             if (null == result) result = new List<Dfa>();
@@ -222,14 +249,29 @@ namespace TestFA
             get
             {
                 object result;
-                if (Attributes.TryGetValue("IsAccept", out result))
+                if (Attributes.TryGetValue("AcceptSymbol", out result))
                 {
-                    if (result is bool val && val)
+                    if (result is int val && val != -1)
                     {
                         return true;
                     }
                 }
                 return false;
+            }
+        }
+        public int AcceptSymbol
+        {
+            get
+            {
+                object result;
+                if (Attributes.TryGetValue("AcceptSymbol", out result))
+                {
+                    if (result is int val)
+                    {
+                        return val;
+                    }
+                }
+                return -1;
             }
         }
         public void RemoveTransition(FATransition trn)
@@ -567,20 +609,56 @@ namespace TestFA
                         writer.Write(_EscapeLabel(sb.ToString()));
                     }
                     writer.WriteLine("\"]");
-                    
+
                 }
                 ++i;
             }
+            i = 0;
             var delim = "";
+            foreach (var ffa in closure)
+            {
+                writer.Write("q");
+                writer.Write(i);
+                writer.Write(" [");
+                
+                writer.Write("label=<");
+                writer.Write("<TABLE BORDER=\"0\"><TR><TD>");
+                writer.Write("q");
+                writer.Write("<SUB>");
+                writer.Write(i);
+                writer.Write("</SUB></TD></TR>");
+
+                if (ffa.IsAccept)
+                {
+                    writer.Write("<TR><TD>");
+                    string acc = Convert.ToString(ffa.AcceptSymbol);
+                    
+                    writer.Write(acc.Replace("\"", "&quot;"));
+                    writer.Write("</TD></TR>");
+                }
+                writer.Write("</TABLE>");
+                writer.Write(">");
+                bool isfinal = false;
+                if (accepting.Contains(ffa))
+                    writer.Write(",shape=doublecircle");
+                else if (isfinal)
+                {
+                    writer.Write(",color=gray");
+                    
+                }
+                writer.WriteLine("]");
+                ++i;
+            }
+            delim = "";
             if (0 < accepting.Count)
             {
                 foreach (var ntfa in accepting)
                 {
-                        writer.Write(delim);
-                        writer.Write("q");
-                        writer.Write(closure.IndexOf(ntfa));
-                        delim = ",";
-                    
+                    writer.Write(delim);
+                    writer.Write("q");
+                    writer.Write(closure.IndexOf(ntfa));
+                    delim = ",";
+
                 }
                 if (delim != "")
                 {
@@ -589,6 +667,117 @@ namespace TestFA
             }
             writer.WriteLine("}");
         }
+        /// <summary>
+		/// Creates a packed state table as a series of integers
+		/// </summary>
+		/// <returns>An integer array representing the machine</returns>
+		public int[] ToArray()
+        {
+            var working = new List<int>();
+            var closure = new List<Dfa>();
+            FillClosure(closure);
+            var stateIndices = new int[closure.Count];
+            // fill in the state information
+            for (var i = 0; i < stateIndices.Length; ++i)
+            {
+                var cfa = closure[i];
+                stateIndices[i] = working.Count;
+                // add the accept
+                working.Add(cfa.IsAccept ? cfa.AcceptSymbol : -1);
+                var itrgp = cfa.FillInputTransitionRangesGroupedByState();
+                // add the number of transitions
+                working.Add(itrgp.Count);
+                foreach (var itr in itrgp)
+                {
+                    // We have to fill in the following after the fact
+                    // We don't have enough info here
+                    // for now just drop the state index as a placeholder
+                    working.Add(closure.IndexOf(itr.Key));
+                    // add the number of packed ranges
+                    working.Add(itr.Value.Count);
+                    // add the packed ranges
+                    working.AddRange(FARange.ToPacked(itr.Value));
+                }
+            }
+            var result = working.ToArray();
+            var state = 0;
+            // now fill in the state indices
+            while (state < result.Length)
+            {
+                ++state;
+                var tlen = result[state++];
+                for (var i = 0; i < tlen; ++i)
+                {
+                    // patch the destination
+                    result[state] = stateIndices[result[state]];
+                    ++state;
+                    var prlen = result[state++];
+                    state += prlen * 2;
+                }
+            }
+            return result;
+        }
+        public static Dfa FromArray(int[] fa)
+        {
+            if (null == fa) throw new ArgumentNullException(nameof(fa));
+            if (fa.Length == 0)
+            {
+                var result = new Dfa();
+                return result;
+            }
+            // create the states and build a map
+            // of state indices in the array to
+            // new FA instances
+            var si = 0;
+            var indexToStateMap = new Dictionary<int, Dfa>();
+            while (si < fa.Length)
+            {
+                var newfa = new Dfa();
+                indexToStateMap.Add(si, newfa);
+                newfa.Attributes["AcceptSymbol"] = fa[si++];
+                // skip to the next state
+                var tlen = fa[si++];
+                for (var i = 0; i < tlen; ++i)
+                {
+                    ++si; // tto
+                    var prlen = fa[si++];
+                    si += prlen * 2;
+                }
+            }
+            // walk the array
+            si = 0;
+            var sid = 0;
+            while (si < fa.Length)
+            {
+                // get the current state
+                var newfa = indexToStateMap[si];
+                // already set above:
+                // newfa.AcceptSymbol = fa[si++];
+                ++si;
+                // transitions length
+                var tlen = fa[si++];
+                for (var i = 0; i < tlen; ++i)
+                {
+                    // destination state index
+                    var tto = fa[si++];
+                    // destination state instance
+                    var to = indexToStateMap[tto];
+                    // range count
+                    var prlen = fa[si++];
+                    for (var j = 0; j < prlen; ++j)
+                    {
+                        var pmin = fa[si++];
+                        var pmax = fa[si++];
+
+                        newfa.AddTransition(new FATransition(to, pmin, pmax));
+
+                    }
+                }
+                ++sid;
+            }
+            return indexToStateMap[0];
+        }
+
         public void RenderToFile(string filename)
         {
             string args = "-T";

@@ -11,7 +11,7 @@ namespace TestFA
         public static Dfa BuildDfa(RegexExpression regexAst)
         {
             int positionCounter = 1;
-            RegexTerminatorExpression endMarker=null;
+            RegexTerminatorExpression endMarker;
             int[] points;
             bool isLexer = regexAst is RegexOrExpression;
             Dictionary<int, RegexExpression> positions = new Dictionary<int, RegexExpression>();
@@ -24,10 +24,6 @@ namespace TestFA
             // Track which positions are inside lazy quantifiers for contagion
             Dictionary<RegexExpression, RegexRepeatExpression> positionToLazyParent =
                 new Dictionary<RegexExpression, RegexRepeatExpression>();
-
-            // Lexer support: Track which positions belong to which disjunction
-            Dictionary<RegexExpression, int> positionToAcceptSymbol = new Dictionary<RegexExpression, int>();
-            Dictionary<RegexTerminatorExpression, int> endMarkerToAcceptSymbol = new Dictionary<RegexTerminatorExpression, int>();
 
             // Track lazy context for proper attribution
             HashSet<RegexExpression> _currentLazyContext = new HashSet<RegexExpression>();
@@ -56,128 +52,27 @@ namespace TestFA
             positionCounter = 1;
 
             // Step 1: Identify lazy quantifiers and mark positions with context
-            MarkLazyPositionsWithContext(regexAst, false, positionToLazyParent, lazyPositions);
+            MarkLazyPositionsWithContext(regexAst, false,positionToLazyParent,lazyPositions);
 
-            // Step 2: Augment with end marker(s) - different for lexer vs single regex
-            var augmentedAst = isLexer
-                ? AugmentWithEndMarkersForLexer(regexAst, positions, positionToAcceptSymbol, endMarkerToAcceptSymbol)
-                : AugmentWithEndMarker(regexAst, out endMarker, positions);
-
-            // For non-lexer case, we still need the endMarker reference
-            if (!isLexer)
-            {
-                endMarkerToAcceptSymbol[endMarker] = 0;
-            }
+            // Step 2: Augment with end marker
+            var augmentedAst = AugmentWithEndMarker(regexAst,out endMarker,positions);
 
             // Step 3: Assign positions to leaf nodes
-            AssignPositions(augmentedAst, positions, ref positionCounter);
+            AssignPositions(augmentedAst,positions, ref positionCounter);
 
             // Step 4: Compute nullable, firstpos, lastpos
             ComputeNodeProperties(augmentedAst);
 
             // Step 5: Compute followpos with proper disjunction handling
-            ComputeFollowPos(augmentedAst, positions, followPos);
+            ComputeFollowPos(augmentedAst,positions,followPos);
 
             // Step 6: Build DFA with lazy attribution and contagion
-            var dfa = ConstructLazyDfa(augmentedAst, points, lazyPositions, endMarkerToAcceptSymbol, followPos, isLexer, positionToAcceptSymbol);
+            var dfa = ConstructLazyDfa(augmentedAst,points,lazyPositions,endMarker,followPos, isLexer);
 
             // Step 7: Apply lazy edge trimming to accepting states
-            ApplyLazyEdgeTrimming(dfa, positionToLazyParent);
+            ApplyLazyEdgeTrimming(dfa,positionToLazyParent);
 
             return dfa;
-        }
-
-        // New method to handle lexer augmentation with multiple end markers
-        private static RegexExpression AugmentWithEndMarkersForLexer(
-            RegexExpression root,
-            Dictionary<int, RegexExpression> positions,
-            Dictionary<RegexExpression, int> positionToAcceptSymbol,
-            Dictionary<RegexTerminatorExpression, int> endMarkerToAcceptSymbol)
-        {
-            if (!(root is RegexOrExpression rootOr))
-            {
-                throw new ArgumentException("Expected RegexOrExpression for lexer mode");
-            }
-
-            // Create a new OR expression with each disjunction augmented with its own end marker
-            var augmentedDisjunctions = new List<RegexExpression>();
-            int acceptSymbol = 0;
-
-            // Process each disjunction in the OR expression
-            var disjunctions = FlattenOrExpression(rootOr);
-
-            foreach (var disjunction in disjunctions)
-            {
-                var endMarker = new RegexTerminatorExpression();
-                endMarkerToAcceptSymbol[endMarker] = acceptSymbol;
-
-                // Mark all positions in this disjunction with the accept symbol
-                MarkPositionsWithAcceptSymbol(disjunction, acceptSymbol, positionToAcceptSymbol);
-
-                var augmentedDisjunction = new RegexConcatExpression(disjunction, endMarker);
-                augmentedDisjunctions.Add(augmentedDisjunction);
-
-                // Debug output to verify correct assignment
-                Debug.WriteLine($"Disjunction {acceptSymbol}: EndMarker={endMarker.GetHashCode()}, AcceptSymbol={acceptSymbol}");
-
-                acceptSymbol++;
-            }
-
-            // Rebuild the OR expression with augmented disjunctions
-            return BuildOrExpression(augmentedDisjunctions);
-        }
-
-        // Helper to flatten nested OR expressions into a list of disjunctions
-        private static List<RegexExpression> FlattenOrExpression(RegexOrExpression orExpr)
-        {
-            var disjunctions = new List<RegexExpression>();
-
-            void FlattenRecursive(RegexExpression expr)
-            {
-                if (expr is RegexOrExpression nestedOr)
-                {
-                    FlattenRecursive(nestedOr.Left);
-                    FlattenRecursive(nestedOr.Right);
-                }
-                else
-                {
-                    disjunctions.Add(expr);
-                }
-            }
-
-            FlattenRecursive(orExpr);
-            return disjunctions;
-        }
-
-        // Helper to rebuild OR expression from list of disjunctions
-        private static RegexExpression BuildOrExpression(List<RegexExpression> disjunctions)
-        {
-            if (disjunctions.Count == 0)
-                throw new ArgumentException("Cannot build OR expression from empty list");
-
-            if (disjunctions.Count == 1)
-                return disjunctions[0];
-
-            RegexExpression result = disjunctions[0];
-            for (int i = 1; i < disjunctions.Count; i++)
-            {
-                result = new RegexOrExpression(result, disjunctions[i]);
-            }
-
-            return result;
-        }
-
-        // Mark all positions in a subtree with the given accept symbol
-        private static void MarkPositionsWithAcceptSymbol(RegexExpression expr, int acceptSymbol, Dictionary<RegexExpression, int> positionToAcceptSymbol)
-        {
-            expr.Visit((parent, node, childIndex, level) =>
-            {
-                if (IsLeafNode(node))
-                {
-                    positionToAcceptSymbol[node] = acceptSymbol;
-                }
-                return true;
-            });
         }
 
         // Van Engelen: "mark downstream regex positions in the DFA states as lazy when a parent position is lazy"
@@ -212,17 +107,17 @@ namespace TestFA
             switch (ast)
             {
                 case RegexBinaryExpression binary:
-                    MarkLazyPositionsWithContext(binary.Left, currentLazyContext, positionToLazyParent, lazyPositions);
-                    MarkLazyPositionsWithContext(binary.Right, currentLazyContext, positionToLazyParent, lazyPositions);
+                    MarkLazyPositionsWithContext(binary.Left, currentLazyContext,positionToLazyParent,lazyPositions);
+                    MarkLazyPositionsWithContext(binary.Right, currentLazyContext,positionToLazyParent,lazyPositions);
                     break;
 
                 case RegexUnaryExpression unary:
-                    MarkLazyPositionsWithContext(unary.Expression, currentLazyContext, positionToLazyParent, lazyPositions);
+                    MarkLazyPositionsWithContext(unary.Expression, currentLazyContext,positionToLazyParent,lazyPositions);
                     break;
             }
         }
 
-        private static RegexConcatExpression AugmentWithEndMarker(RegexExpression root, out RegexTerminatorExpression _endMarker, Dictionary<int, RegexExpression> _positions)
+        private static RegexConcatExpression AugmentWithEndMarker(RegexExpression root,out RegexTerminatorExpression _endMarker, Dictionary<int, RegexExpression> _positions)
         {
             _endMarker = new RegexTerminatorExpression();
             return new RegexConcatExpression(root, _endMarker);
@@ -245,12 +140,12 @@ namespace TestFA
             switch (node)
             {
                 case RegexBinaryExpression binary:
-                    AssignPositions(binary.Left, _positions, ref _positionCounter);
-                    AssignPositions(binary.Right, _positions, ref _positionCounter);
+                    AssignPositions(binary.Left,_positions, ref _positionCounter);
+                    AssignPositions(binary.Right,_positions, ref _positionCounter);
                     break;
 
                 case RegexUnaryExpression unary:
-                    AssignPositions(unary.Expression, _positions, ref _positionCounter);
+                    AssignPositions(unary.Expression,_positions,ref _positionCounter);
                     break;
             }
         }
@@ -371,8 +266,8 @@ namespace TestFA
                         }
                     }
 
-                    ComputeFollowPosRecursive(concat.Left, _followPos);
-                    ComputeFollowPosRecursive(concat.Right, _followPos);
+                    ComputeFollowPosRecursive(concat.Left,_followPos);
+                    ComputeFollowPosRecursive(concat.Right,_followPos);
                     break;
 
                 case RegexOrExpression or:
@@ -380,8 +275,8 @@ namespace TestFA
                     // For alternation, we don't add followpos rules here
                     // The disjunction is handled in the DFA construction phase
                     // by including both branches in firstpos/lastpos
-                    ComputeFollowPosRecursive(or.Left, _followPos);
-                    ComputeFollowPosRecursive(or.Right, _followPos);
+                    ComputeFollowPosRecursive(or.Left,_followPos);
+                    ComputeFollowPosRecursive(or.Right,_followPos);
                     break;
 
                 case RegexRepeatExpression repeat:
@@ -405,7 +300,7 @@ namespace TestFA
                         }
                     }
 
-                    ComputeFollowPosRecursive(repeat.Expression, _followPos);
+                    ComputeFollowPosRecursive(repeat.Expression,_followPos);
                     break;
             }
         }
@@ -465,18 +360,11 @@ namespace TestFA
         }
 
         // Van Engelen: Build DFA with lazy contagion during construction
-        private static Dfa ConstructLazyDfa(
-            RegexExpression root,
-            int[] points,
-            Dictionary<RegexExpression, bool> lazyPositions,
-            Dictionary<RegexTerminatorExpression, int> endMarkerToAcceptSymbol,
-            Dictionary<RegexExpression, HashSet<RegexExpression>> followPos,
-            bool isLexer,
-            Dictionary<RegexExpression, int> positionToAcceptSymbol)
+        private static Dfa ConstructLazyDfa(RegexExpression root, int[] points, Dictionary<RegexExpression, bool> lazyPositions, RegexTerminatorExpression endMarker, Dictionary<RegexExpression, HashSet<RegexExpression>> followPos, bool isLexer)
         {
             var startPositions = root.GetFirstPos();
-            var startLazyPositions = GetLazyPositions(startPositions, lazyPositions);
-            var startState = CreateStateFromPositions(startPositions, startLazyPositions, endMarkerToAcceptSymbol, positionToAcceptSymbol);
+            var startLazyPositions = GetLazyPositions(startPositions,lazyPositions);
+            var startState = CreateStateFromPositions(startPositions, startLazyPositions,endMarker);
 
             var unmarkedStates = new Queue<Dfa>();
             var allStates = new Dictionary<LazyStateKey, Dfa>();
@@ -496,8 +384,7 @@ namespace TestFA
 
                 foreach (var pos in currentPositions)
                 {
-                    // Skip all end markers (not just the single endMarker)
-                    if (pos is RegexTerminatorExpression) continue;
+                    if (pos == endMarker) continue;
 
                     for (int i = 0; i < points.Length; ++i)
                     {
@@ -535,7 +422,7 @@ namespace TestFA
                     if (nextPositions.Count == 0) continue;
 
                     // Van Engelen: "Laziness is contagious" - propagate lazy attribution
-                    var nextLazyPositions = PropagatelazyContagion(positions, nextPositions, currentLazyPositions, lazyPositions, followPos);
+                    var nextLazyPositions = PropagatelazyContagion(positions, nextPositions, currentLazyPositions,lazyPositions, followPos);
 
                     // CRITICAL: Ensure disjunctive states are properly distinguished
                     var nextKey = new LazyStateKey(nextPositions, nextLazyPositions);
@@ -543,7 +430,7 @@ namespace TestFA
 
                     if (!allStates.ContainsKey(nextKey))
                     {
-                        nextState = CreateStateFromPositions(nextPositions, nextLazyPositions, endMarkerToAcceptSymbol, positionToAcceptSymbol);
+                        nextState = CreateStateFromPositions(nextPositions, nextLazyPositions,endMarker);
                         allStates[nextKey] = nextState;
                         unmarkedStates.Enqueue(nextState);
                     }
@@ -607,7 +494,7 @@ namespace TestFA
             var newLazyPositions = new HashSet<RegexExpression>();
 
             // Start with positions that are inherently lazy
-            newLazyPositions.UnionWith(GetLazyPositions(targetPositions, lazyPositions));
+            newLazyPositions.UnionWith(GetLazyPositions(targetPositions,lazyPositions));
 
             // Van Engelen: "propagating laziness along a path"
             foreach (var sourcePos in sourcePositions)
@@ -647,7 +534,7 @@ namespace TestFA
 
                     if (lazyPositions.Count > 0)
                     {
-                        TrimLazyEdges(state, lazyPositions, positionToLazyParent);
+                        TrimLazyEdges(state, lazyPositions,positionToLazyParent);
                     }
                 }
             }
@@ -662,7 +549,7 @@ namespace TestFA
             {
                 // Check if this transition represents a "lazy edge" that should be trimmed
                 // Van Engelen: "we know when DFA edges point forward or backward in the regex string"
-                bool isLazyEdge = IsLazyEdgeToTrim(acceptingState, transition.To, lazyPositions, positionToLazyParent);
+                bool isLazyEdge = IsLazyEdgeToTrim(acceptingState, transition.To, lazyPositions,positionToLazyParent);
 
                 if (isLazyEdge)
                 {
@@ -705,41 +592,13 @@ namespace TestFA
             return false;
         }
 
-        // Updated to handle multiple end markers and accept symbols
-        private static Dfa CreateStateFromPositions(
-            HashSet<RegexExpression> positions,
-            HashSet<RegexExpression> lazyPositions,
-            Dictionary<RegexTerminatorExpression, int> endMarkerToAcceptSymbol,
-            Dictionary<RegexExpression, int> positionToAcceptSymbol)
+        private static Dfa CreateStateFromPositions(HashSet<RegexExpression> positions, HashSet<RegexExpression> lazyPositions, RegexTerminatorExpression endMarker)
         {
             var state = new Dfa();
 
-            // Check if this state contains any end markers (accepting state)
-            int? acceptSymbol = null;
-            var endMarkersFound = new List<(RegexTerminatorExpression, int)>();
-
-            foreach (var pos in positions)
+            if (positions.Contains(endMarker))
             {
-                if (pos is RegexTerminatorExpression endMarker && endMarkerToAcceptSymbol.ContainsKey(endMarker))
-                {
-                    int currentAcceptSymbol = endMarkerToAcceptSymbol[endMarker];
-                    endMarkersFound.Add((endMarker, currentAcceptSymbol));
-
-                    // Use the lowest accept symbol (highest precedence) if multiple end markers are present
-                    if (!acceptSymbol.HasValue || currentAcceptSymbol < acceptSymbol.Value)
-                    {
-                        acceptSymbol = currentAcceptSymbol;
-                    }
-                }
-            }
-
-            // Set the accept symbol if this is an accepting state
-            if (acceptSymbol.HasValue)
-            {
-                state.Attributes["AcceptSymbol"] = acceptSymbol.Value;
-
-                // Debug output
-                Debug.WriteLine($"Creating accepting state with symbol {acceptSymbol.Value}. EndMarkers found: {string.Join(", ", endMarkersFound.Select(em => $"{em.Item1.GetHashCode()}={em.Item2}"))}");
+                state.Attributes["AcceptSymbol"] = 0;
             }
 
             state.Attributes["Positions"] = positions.ToList();
