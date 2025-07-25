@@ -671,7 +671,7 @@ namespace TestFA
 		/// Creates a packed state table as a series of integers
 		/// </summary>
 		/// <returns>An integer array representing the machine</returns>
-		public int[] ToArray()
+		public int[] ToRangeArray()
         {
             var working = new List<int>();
             var closure = new List<Dfa>();
@@ -717,6 +717,87 @@ namespace TestFA
             }
             return result;
         }
+        /// <summary>
+		/// Creates a packed state table as a series of integers
+		/// </summary>
+		/// <returns>An integer array representing the machine</returns>
+		public int[] ToNonRangeArray()
+        {
+            var working = new List<int>();
+            var codepoints = new List<int>();
+            var closure = new List<Dfa>();
+            FillClosure(closure);
+            var stateIndices = new int[closure.Count];
+            // fill in the state information
+            for (var i = 0; i < stateIndices.Length; ++i)
+            {
+                var cfa = closure[i];
+                stateIndices[i] = working.Count;
+                // add the accept
+                working.Add(cfa.IsAccept ? cfa.AcceptSymbol : -1);
+                var itrgp = cfa.FillInputTransitionRangesGroupedByState();
+                // add the number of transitions
+                working.Add(itrgp.Count);
+                foreach (var itr in itrgp)
+                {
+                    // We have to fill in the following after the fact
+                    // We don't have enough info here
+                    // for now just drop the state index as a placeholder
+                    working.Add(closure.IndexOf(itr.Key));
+                    // add the number of packed ranges
+                    // add the packed ranges
+                    codepoints.Clear();
+                    foreach(var range in itr.Value)
+                    {
+                        for(var j = range.Min; j <= range.Max; ++j)
+                        {
+                            codepoints.Add(j);
+                        }
+                    }
+                    working.Add(codepoints.Count);
+                    working.AddRange(codepoints);
+                }
+            }
+            // force the array to be odd. This is how we mark it as a non-range array for FromArray
+            // range arrays are *always* even
+            if (0 == (working.Count % 2))
+            {
+                working.Add(-1);
+            }
+            var result = working.ToArray();
+            var state = 0;
+            // now fill in the state indices
+            while (state < result.Length)
+            {
+                ++state;
+                if (state >= result.Length) break;
+                var tlen = result[state++];
+                for (var i = 0; i < tlen; ++i)
+                {
+                    // patch the destination
+                    result[state] = stateIndices[result[state]];
+                    ++state;
+                    var prlen = result[state++];
+                    state += prlen;
+                }
+            }
+            
+            return result;
+        }
+        public static bool IsRangeArray(int[] fa)
+        {
+            return fa.Length % 2 == 0;
+        }
+        public int[] ToArray()
+        {
+            var rangeArray = ToRangeArray();
+            var nonRangeArray = ToNonRangeArray();
+            if(rangeArray.Length<nonRangeArray.Length)
+            {
+                return rangeArray;
+            }
+            return nonRangeArray;
+        }
         public static Dfa FromArray(int[] fa)
         {
             if (null == fa) throw new ArgumentNullException(nameof(fa));
@@ -725,6 +806,7 @@ namespace TestFA
                 var result = new Dfa();
                 return result;
             }
+            var isRangeArray = (0 == fa.Length % 2);
             // create the states and build a map
             // of state indices in the array to
             // new FA instances
@@ -736,12 +818,20 @@ namespace TestFA
                 indexToStateMap.Add(si, newfa);
                 newfa.Attributes["AcceptSymbol"] = fa[si++];
                 // skip to the next state
+                if (si >= fa.Length)
+                {
+                    break;
+                }
+
                 var tlen = fa[si++];
                 for (var i = 0; i < tlen; ++i)
                 {
                     ++si; // tto
                     var prlen = fa[si++];
-                    si += prlen * 2;
+                    if (isRangeArray)
+                        si += prlen * 2;
+                    else
+                        si += prlen;
                 }
             }
             // walk the array
@@ -754,6 +844,10 @@ namespace TestFA
                 // already set above:
                 // newfa.AcceptSymbol = fa[si++];
                 ++si;
+                if (si >= fa.Length)
+                {
+                    break;
+                }
                 // transitions length
                 var tlen = fa[si++];
                 for (var i = 0; i < tlen; ++i)
@@ -766,8 +860,15 @@ namespace TestFA
                     var prlen = fa[si++];
                     for (var j = 0; j < prlen; ++j)
                     {
-                        var pmin = fa[si++];
-                        var pmax = fa[si++];
+                        int pmin, pmax;
+                        if (isRangeArray)
+                        {
+                            pmin = fa[si++];
+                            pmax = fa[si++];
+                        } else
+                        {
+                            pmin = pmax = fa[si++];
+                        }
 
                         newfa.AddTransition(new FATransition(to, pmin, pmax));
 

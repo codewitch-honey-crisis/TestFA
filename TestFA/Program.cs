@@ -28,7 +28,9 @@ namespace TestFA
                 var test1 = "(?<baz>foo|fubar)+";
                 var test2 = "(a|b)*?bb";
                 var test3 = "hello world!";
-                var ast = RegexExpression.Parse($"({ccommentLazy})|({test2})|({test3})");
+                //var ast = RegexExpression.Parse($"({ccommentLazy})|({test2})|({test3})");
+                //var ast = RegexExpression.Parse(test3);
+                var ast = RegexExpression.Parse(test2);
                 Console.WriteLine(ast);
                 ast.Visit((parent, expr, index, level) =>
                 {
@@ -39,12 +41,19 @@ namespace TestFA
                 //return;
                 var dfa = ast.ToDfa();
                 var array = dfa.ToArray();
+                if (Dfa.IsRangeArray(array))
+                {
+                    Console.WriteLine("Using range array");
+                } else
+                {
+                    Console.WriteLine("Using non range array");
+                }
                 PrintArray(array);
                 dfa = Dfa.FromArray(array);
                 dfa.RenderToFile(@"..\..\..\dfa.dot");
                 dfa.RenderToFile(@"..\..\..\dfa.jpg");
                 Console.WriteLine("DFA construction successful!");
-                Console.WriteLine($"Start state created with {dfa.Transitions.Count} transitions. State machine has {dfa.FillClosure().Count} states");
+                Console.WriteLine($"Start state created with {dfa.Transitions.Count} transitions. State machine has {dfa.FillClosure().Count} states. Array length is {array.Length}");
 
                 // Test the DFA with some strings
                 TestDfa(dfa, "aaabababb");
