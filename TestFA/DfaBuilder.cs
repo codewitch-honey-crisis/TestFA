@@ -1,4 +1,5 @@
-﻿using System;
+﻿// An implementation of Dr. Robert van Engelen's lazy DFA matching state construction algorithm used in his RE/FLEX project
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
