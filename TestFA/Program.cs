@@ -32,7 +32,7 @@ namespace TestFA
                 //var ast = RegexExpression.Parse(test3);
                 var test2x = RegexExpression.Parse(test2).ToString("x");
                 Console.WriteLine($"{test2} expanded is {test2x}");
-                var ast = RegexExpression.Parse(test2);
+                var ast = RegexExpression.Parse(test2x);
                 Console.WriteLine(ast);
                 ast.Visit((parent, expr, index, level) =>
                 {
@@ -41,6 +41,8 @@ namespace TestFA
                     return true;
                 });
                 //return;
+                ast = RegexExpression.Parse(ast.ToString("x"))!;
+
                 var dfa = ast.ToDfa();
                 var array = dfa.ToArray();
                 if (Dfa.IsRangeArray(array))
@@ -51,7 +53,7 @@ namespace TestFA
                     Console.WriteLine("Using non range array");
                 }
                 PrintArray(array);
-                dfa = Dfa.FromArray(array);
+                //dfa = Dfa.FromArray(array);
                 dfa.RenderToFile(@"..\..\..\dfa.dot");
                 dfa.RenderToFile(@"..\..\..\dfa.jpg");
                 Console.WriteLine("DFA construction successful!");

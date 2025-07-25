@@ -10,7 +10,7 @@ namespace TestFA
     {
         public static Dfa BuildDfa(RegexExpression regexAst)
         {
-            regexAst = RegexExpression.Parse(regexAst.ToString("x"))!;
+            
             int positionCounter = 1;
             RegexTerminatorExpression endMarker=null;
             int[] points;
@@ -84,7 +84,7 @@ namespace TestFA
 
             // Step 7: Apply lazy edge trimming to accepting states
             ApplyLazyEdgeTrimming(dfa, positionToLazyParent);
-
+           
             return dfa;
         }
 
@@ -292,7 +292,6 @@ namespace TestFA
                     ComputeNodeProperties(or.Right);
 
                     var orChildren = new[] { or.Left, or.Right }.Where(c => c != null).ToArray();
-
                     node.SetNullable(orChildren.Any(c => c.GetNullable()));
 
                     foreach (var child in orChildren)
@@ -300,8 +299,9 @@ namespace TestFA
                         node.GetFirstPos().UnionWith(child.GetFirstPos());
                         node.GetLastPos().UnionWith(child.GetLastPos());
                     }
-                    break;
 
+                   
+                    break;
                 case RegexRepeatExpression repeat:
                     ComputeNodeProperties(repeat.Expression);
 
@@ -354,12 +354,16 @@ namespace TestFA
         private static void ComputeFollowPosRecursive(RegexExpression node, Dictionary<RegexExpression, HashSet<RegexExpression>> _followPos)
         {
             if (node == null) return;
-
+            
             switch (node)
             {
                 case RegexConcatExpression concat:
                     if (concat.Left != null && concat.Right != null)
                     {
+                        // Debug output
+                        //var leftLast = string.Join(",", concat.Left.GetLastPos().Select(p => p.GetDfaPosition()));
+                        //var rightFirst = string.Join(",", concat.Right.GetFirstPos().Select(p => p.GetDfaPosition()));
+                        
                         foreach (var pos in concat.Left.GetLastPos())
                         {
                             if (_followPos.ContainsKey(pos))
@@ -368,7 +372,6 @@ namespace TestFA
                             }
                         }
                     }
-
                     ComputeFollowPosRecursive(concat.Left, _followPos);
                     ComputeFollowPosRecursive(concat.Right, _followPos);
                     break;
@@ -380,6 +383,7 @@ namespace TestFA
                     // by including both branches in firstpos/lastpos
                     ComputeFollowPosRecursive(or.Left, _followPos);
                     ComputeFollowPosRecursive(or.Right, _followPos);
+                    
                     break;
 
                 case RegexRepeatExpression repeat:
@@ -409,51 +413,6 @@ namespace TestFA
             }
         }
 
-        // Van Engelen: "DFA states are unique sets of regex positions" but with lazy attribution
-        private class LazyStateKey
-        {
-            public HashSet<RegexExpression> Positions { get; set; }
-            public HashSet<RegexExpression> LazyPositions { get; set; }
-
-            public LazyStateKey(HashSet<RegexExpression> positions, HashSet<RegexExpression> lazyPositions)
-            {
-                Positions = positions;
-                LazyPositions = lazyPositions;
-            }
-
-            public override bool Equals(object obj)
-            {
-                if (obj is LazyStateKey other)
-                {
-                    return Positions.SetEquals(other.Positions) && LazyPositions.SetEquals(other.LazyPositions);
-                }
-                return false;
-            }
-
-            public override int GetHashCode()
-            {
-                int hash = 0;
-                foreach (var pos in Positions.OrderBy(p => p.GetDfaPosition()))
-                {
-                    hash ^= pos.GetHashCode();
-                }
-                foreach (var lazyPos in LazyPositions.OrderBy(p => p.GetDfaPosition()))
-                {
-                    hash ^= lazyPos.GetHashCode() << 1;
-                }
-                return hash;
-            }
-
-            public override string ToString()
-            {
-                var posStr = string.Join(",", Positions.Where(p => p.GetDfaPosition() != -1)
-                    .OrderBy(p => p.GetDfaPosition()).Select(p => p.GetDfaPosition()));
-                var lazyStr = string.Join(",", LazyPositions.Where(p => p.GetDfaPosition() != -1)
-                    .OrderBy(p => p.GetDfaPosition()).Select(p => p.GetDfaPosition()));
-                return $"[{posStr}]L[{lazyStr}]";
-            }
-        }
-
         private static bool PositionMatchesRange(RegexExpression pos, FARange range)
         {
             foreach (var range2 in pos.GetRanges())
@@ -475,13 +434,13 @@ namespace TestFA
         {
             var startPositions = root.GetFirstPos();
             var startLazyPositions = GetLazyPositions(startPositions, lazyPositions);
-            var startState = CreateStateFromPositions(startPositions, startLazyPositions, endMarkerToAcceptSymbol, positionToAcceptSymbol);
-
+            
             var unmarkedStates = new Queue<Dfa>();
-            var allStates = new Dictionary<LazyStateKey, Dfa>();
+            var allStates = new Dictionary<FAAttributes, Dfa>();
 
-            var startKey = new LazyStateKey(startPositions, startLazyPositions);
-            allStates[startKey] = startState;
+            var startState = CreateStateFromPositions(startPositions, startLazyPositions, endMarkerToAcceptSymbol, positionToAcceptSymbol);
+            allStates[startState.Attributes] = startState; 
+            
             unmarkedStates.Enqueue(startState);
 
             while (unmarkedStates.Count > 0)
@@ -489,8 +448,7 @@ namespace TestFA
                 var currentState = unmarkedStates.Dequeue();
                 var currentPositions = GetPositionsFromState(currentState);
                 var currentLazyPositions = GetLazyPositionsFromState(currentState);
-
-                // Group positions by character ranges for transition construction
+              // Group positions by character ranges for transition construction
                 var transitionMap = new Dictionary<FARange, HashSet<RegexExpression>>();
 
                 foreach (var pos in currentPositions)
@@ -519,8 +477,11 @@ namespace TestFA
                 // Create transitions for each character range
                 foreach (var transition in transitionMap)
                 {
+                    
                     var range = transition.Key;
                     var positions = transition.Value;
+
+
 
                     var nextPositions = new HashSet<RegexExpression>();
                     foreach (var pos in positions)
@@ -530,25 +491,39 @@ namespace TestFA
                             nextPositions.UnionWith(followPos[pos]);
                         }
                     }
-
+                    var nextPosStr = string.Join(",", nextPositions.Select(p => p.GetDfaPosition()));
+                    
                     if (nextPositions.Count == 0) continue;
+
 
                     // Van Engelen: "Laziness is contagious" - propagate lazy attribution
                     var nextLazyPositions = PropagatelazyContagion(positions, nextPositions, currentLazyPositions, lazyPositions, followPos);
 
-                    // CRITICAL: Ensure disjunctive states are properly distinguished
-                    var nextKey = new LazyStateKey(nextPositions, nextLazyPositions);
+                    // CRITICAL: Ensure disjunctive states are properly distinguished by full attributes
+                    var candidateState = CreateStateFromPositions(nextPositions, nextLazyPositions, endMarkerToAcceptSymbol, positionToAcceptSymbol);
+
                     Dfa nextState;
 
-                    if (!allStates.ContainsKey(nextKey))
+                    // Debug: Show what attributes we're comparing
+                    var posStr = string.Join(",", nextPositions.Select(p => p.GetDfaPosition()));
+                    
+                    // Find existing state with same attributes, or use the new one
+                    var existingState = allStates.Values.FirstOrDefault(s => {
+                        bool areEqual = s.Attributes.Equals(candidateState.Attributes);
+                        return areEqual;
+                    });
+
+                    if (existingState == null)
                     {
-                        nextState = CreateStateFromPositions(nextPositions, nextLazyPositions, endMarkerToAcceptSymbol, positionToAcceptSymbol);
-                        allStates[nextKey] = nextState;
+                        // No existing state with these attributes - use the new one
+                        nextState = candidateState;
+                        allStates[candidateState.Attributes] = nextState;
                         unmarkedStates.Enqueue(nextState);
                     }
                     else
                     {
-                        nextState = allStates[nextKey];
+                        // Found existing state with same attributes - reuse it
+                        nextState = existingState;
                     }
 
                     // Add transition to next state
@@ -573,7 +548,7 @@ namespace TestFA
                     }
                     if (!found)
                     {
-                        ffa.RemoveTransition(trns);
+                        //ffa.RemoveTransition(trns);
                     }
                 }
             }

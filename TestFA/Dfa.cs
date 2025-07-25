@@ -44,7 +44,36 @@ namespace TestFA
             {
                 object? val;
                 if (!other.TryGetValue(attr.Key, out val)) return false;
-                if (!object.Equals(attr.Value, val)) return false;
+                var en = false;
+                if (attr.Value is System.Collections.ICollection e)
+                {
+                    if (!(val is System.Collections.ICollection))
+                    {
+                        return false;
+                    }
+                    en = true;
+                }
+                if (!en)
+                {
+                    if (!object.Equals(attr.Value, val)) return false;
+                } else
+                {
+                    var col1 = attr.Value as System.Collections.ICollection;
+                    var col2 = val as System.Collections.ICollection;
+                    if(col1.Count!=col2.Count) return false;
+                    foreach(var v1 in col1)
+                    {
+                        var found = false;
+                        foreach(var v2 in col2)
+                        {
+                            if(object.Equals(v1, v2))
+                            {
+                                found = true; break;
+                            }
+                        }
+                        if(!found) return false;   
+                    }
+                }
 
             }
             return true;
@@ -241,7 +270,7 @@ namespace TestFA
             }
             return result;
         }
-        public readonly Dictionary<string, object> Attributes = new Dictionary<string, object>();
+        public readonly FAAttributes Attributes = new FAAttributes();
         readonly List<FATransition> _transitions = new List<FATransition>(); // TODO: wrap this with IReadOnlyList for a public property, and add AddTransition
         public IReadOnlyList<FATransition> Transitions { get { return _transitions; } }
         public bool IsAccept
