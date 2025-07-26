@@ -24,15 +24,13 @@ namespace TestFA
             try
             {
                 var ccomment = @"\/\*([^\*]|\*+[^\/])*\*\/";
-                var ccommentLazy = @"\/\*(.|\n)*?\*\/";
+                var ccommentLazy = "# C comment\n"+@"\/\*(.|\n)*?\*\/";
                 var test1 = "(?<baz>foo|fubar)+";
-                var test2 = "(a|b)*?(b{2}){1,3}";
-                var test3 = "hello world!";
-                //var ast = RegexExpression.Parse($"({ccommentLazy})|({test2})|({test3})");
-                //var ast = RegexExpression.Parse(test3);
-                var test2x = RegexExpression.Parse(test2).ToString("x");
-                Console.WriteLine($"{test2} expanded is {test2x}");
-                var ast = RegexExpression.Parse(test2x);
+                var test2 = "(a|b)*?(b{2})";
+                var test3 = "^hello world!$";
+                var lexer = $"# Test Lexer\n{test1}\n{ccommentLazy}\n{test2}\n{test3}";
+                var ast = RegexExpression.Parse(lexer);
+                //var ast = RegexExpression.Parse(test2x);
                 Console.WriteLine(ast);
                 ast.Visit((parent, expr, index, level) =>
                 {
@@ -40,9 +38,8 @@ namespace TestFA
                     Console.WriteLine($"{indent}{expr.GetType().Name}\t -> {expr.ToString()}");
                     return true;
                 });
-                //return;
-                ast = RegexExpression.Parse(ast.ToString("x"))!;
-
+      
+               
                 var dfa = ast.ToDfa();
                 var array = dfa.ToArray();
                 if (Dfa.IsRangeArray(array))
@@ -63,6 +60,8 @@ namespace TestFA
                 TestDfa(dfa, "aaabababb");
                 TestDfa(dfa, "/* foo */");
                 TestDfa(dfa, "fubar");
+                TestDfa(dfa, "foobaz");
+                TestDfa(dfa, "/* broke *");
                 TestDfa(dfa, "hello world!");
             }
             catch (Exception ex)
@@ -74,47 +73,79 @@ namespace TestFA
        
         static void TestDfa(Dfa startState, string input)
         {
+
             var currentState = startState;
+            int position = 0;
+            bool atLineStart = true;
 
             Console.WriteLine($"\n=== Testing '{input}' ===");
 
-     
-            for (int i = 0; i < input.Length; i++)
+            while (position <= input.Length)
             {
-                char c = input[i];
                 bool found = false;
 
-       
                 foreach (var transition in currentState.Transitions)
                 {
-                    if (c >= transition.Min && c <= transition.Max)
+                    // Check anchor transitions first
+                    if (transition.Min == -2 && transition.Max == -2)  // START_ANCHOR ^
                     {
-                        currentState = transition.To;
-                        found = true;
-                        break;
+                        if (atLineStart)
+                        {
+                            currentState = transition.To;
+                            atLineStart = false;
+                            found = true;
+                            break;  // Exit foreach, don't check other transitions
+                        }
+                    }
+                    else if (transition.Min == -3 && transition.Max == -3)  // END_ANCHOR $
+                    {
+                        if (position == input.Length)
+                        {
+                            currentState = transition.To;
+                            found = true;
+                            break;  // Exit foreach, don't check other transitions
+                        }
+                    }
+                    // Check character transitions only if not an anchor
+                    else if (transition.Min >= 0 && position < input.Length)
+                    {
+                        char c = input[position];
+                        if (c >= transition.Min && c <= transition.Max)
+                        {
+                            currentState = transition.To;
+                            position++;
+                            atLineStart = (c == '\n');
+                            found = true;
+                            break;  // Exit foreach, don't check other transitions
+                        }
                     }
                 }
 
                 if (!found)
                 {
-                    Console.WriteLine($"REJECTED: No transition for '{c}' at position {i}");
+                    if (position < input.Length)
+                        Console.WriteLine($"REJECTED: No transition for '{input[position]}' at position {position}");
+                    else
+                        Console.WriteLine($"REJECTED: No valid end transition");
                     return;
                 }
 
-             }
-
-
-            bool isAccepted = currentState.IsAccept;
-
-            if (isAccepted)
-            {
-                Console.WriteLine($"ACCEPTED: {currentState.AcceptSymbol}");
-               
+                // Check for acceptance
+                if (currentState.IsAccept)
+                {
+                    if (position < input.Length - 1)
+                    {
+                        Console.WriteLine($"Rejected: Input remaining");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"ACCEPTED: {currentState.AcceptSymbol}");
+                    }
+                    return;
+                }
             }
-            else
-            {
-                Console.WriteLine($"REJECTED: Not in accept state");
-            }
+            
+            Console.WriteLine($"REJECTED: Not in accept state");
         }
 
  

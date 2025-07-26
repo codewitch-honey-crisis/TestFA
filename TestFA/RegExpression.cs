@@ -13,6 +13,18 @@ namespace TestFA
         public string Input = null;
         public int Position = -1;
         public int Codepoint = -2;
+        public int StartPosition = 0;
+        int StringPosition
+        {
+            get
+            {
+                return Position - StartPosition;
+            }
+            set
+            {
+                Position = value + StartPosition;
+            }
+        }
         public StringBuilder CaptureBuffer { get; } = new StringBuilder();
         public void Capture()
         {
@@ -48,19 +60,19 @@ namespace TestFA
                 Codepoint = -1;
                 return -1;
             }
-            if (++Position >= Input.Length)
+            if (++StringPosition >= Input.Length)
             {
                 Codepoint = -1;
                 return -1;
             }
-            Codepoint = Input[Position];
+            Codepoint = Input[StringPosition];
             if (Codepoint <= 0xFFFF && char.IsHighSurrogate((char)Codepoint))
             {
-                if (++Position >= Input.Length)
+                if (++StringPosition >= Input.Length)
                 {
                     throw new IOException("Unexpected end of input in Unicode stream");
                 }
-                var tmp = Input[Position];
+                var tmp = Input[StringPosition];
                 if (tmp > 0xFFFF || !char.IsLowSurrogate((char)tmp))
                 {
                     throw new IOException("Unterminated surrogate Unicode stream");
@@ -189,12 +201,12 @@ namespace TestFA
         public bool TrySkipWhiteSpace()
         {
             EnsureStarted();
-            if (Input == null || Position >= Input.Length) return false;
-            if (!char.IsWhiteSpace(Input, Position))
+            if (Input == null || StringPosition >= Input.Length) return false;
+            if (!char.IsWhiteSpace(Input, StringPosition))
                 return false;
             Advance();
-            if (Position < Input.Length && char.IsLowSurrogate(Input, Position)) ++Position;
-            while (Position < Input.Length && char.IsWhiteSpace(Input, Position))
+            if (StringPosition < Input.Length && char.IsLowSurrogate(Input,  StringPosition)) ++StringPosition;
+            while (StringPosition < Input.Length && char.IsWhiteSpace(Input, StringPosition))
             {
                 Advance();
             }
@@ -203,12 +215,12 @@ namespace TestFA
         public bool TryReadDigits()
         {
             EnsureStarted();
-            if (Input == null || Position >= Input.Length) return false;
-            if (!char.IsDigit(Input, Position))
+            if (Input == null || StringPosition >= Input.Length) return false;
+            if (!char.IsDigit(Input, StringPosition))
                 return false;
             Capture();
             Advance();
-            while (Position < Input.Length && char.IsDigit(Input, Position))
+            while (StringPosition < Input.Length && char.IsDigit(Input, StringPosition))
             {
                 Capture();
                 Advance();
@@ -241,6 +253,12 @@ namespace TestFA
         }
     }
     #endregion StringCursor
+
+    public enum RegexAnchorType
+    {
+        LineStart = 0,
+        LineEnd
+    }
     /// <summary>
     /// Indicates an action to take when a node is visited
     /// </summary>
@@ -282,6 +300,7 @@ namespace TestFA
         {
             Position = position;
         }
+        public List<RegexComment> Comments { get; } = new List<RegexComment> ();
 
         public virtual bool IsLeaf { get; } = false;
         public virtual IList<FARange> GetRanges()
@@ -360,6 +379,15 @@ namespace TestFA
         {
             if (action(parent, this, childIndex, level))
             {
+                var lexer = this as RegexLexerExpression;
+                if (lexer != null)
+                {
+                    for (int i = 0; i < lexer.Rules.Count; i++)
+                    {
+                        lexer.Rules[i]._Visit(this, action, i, level + 1);
+                    }
+                    return true;
+                }
                 var unary = this as RegexUnaryExpression;
                 if (unary != null && unary.Expression != null)
                 {
@@ -438,9 +466,65 @@ namespace TestFA
             pc.Input = expression;
             return _Parse(pc);
         }
+        
         private static RegexExpression? _Parse(StringCursor pc)
         {
+            var result = new RegexLexerExpression();
+            pc.EnsureStarted();
+            result.SetLocation(pc.Position);
+            var comments = new List<RegexComment>();
+            RegexExpression? expr;
+            var sc = new StringCursor();
 
+            do
+            {
+                pc.CaptureBuffer.Clear();
+                int pos = pc.Position;
+                pc.TryReadUntil('\n');
+                var line = pc.CaptureBuffer.ToString();
+                if (line.EndsWith('\n'))
+                {
+                    line = line.Substring(0, line.Length - 1);
+                }
+                if (line.EndsWith('\r'))
+                {
+                    line = line.Substring(0, line.Length - 1);
+                }
+                if (line.StartsWith("#") && (line.Length == 1 || char.IsWhiteSpace(line[1]))) // is comment
+                {
+                    RegexComment comment = new RegexComment();
+                    comment.SetPosition(pos);
+                    if (line.Length > 1)
+                    {
+                        comment.Text = line.Substring(2);
+                    }
+                    comments.Add(comment);
+                }
+                else // is expression
+                {
+                    sc.Codepoint = -2;
+                    sc.StartPosition = pos;
+                    sc.Position = pos - 1;
+                    sc.Input = line;
+                    expr = _ParseExpr(sc);
+                    if (expr != null)
+                    {
+                        expr.Comments.AddRange(comments);
+                        comments.Clear();
+                        result.Rules.Add(expr);
+                    }
+                }
+            } while (pc.Codepoint != -1);
+
+            return result.Rules.Count switch
+            {
+                0 => null,
+                1 => result.Rules[0],
+                _ => result,
+            };
+        }
+        private static RegexExpression? _ParseExpr(StringCursor pc)
+        {
             RegexExpression? result = null, next = null;
             int ich;
             bool cap;
@@ -451,6 +535,35 @@ namespace TestFA
             {
                 switch (pc.Codepoint)
                 {
+                    case '^':
+                        pc.Advance();
+                        var lsanch = new RegexAnchorExpression(RegexAnchorType.LineStart);
+                        lsanch.SetLocation(position);
+                        if (null == result)
+                            result = lsanch;
+                        else
+                        {
+                            result = new RegexConcatExpression(result, lsanch);
+                            result.SetLocation(position);
+
+                        }
+                        break;
+                    case '$':
+                        pc.Advance();
+                        var leanch = new RegexAnchorExpression(RegexAnchorType.LineEnd);
+                        leanch.SetLocation(position);
+                        if (null == result)
+                            result = leanch;
+                        else
+                        {
+                            result = new RegexConcatExpression(result, leanch);
+                            result.SetLocation(position);
+
+                        }
+                        break;
+                    case '\n':
+                        pc.Advance();
+                        return result;
                     case -1:
                         return result;
                     case '.':
@@ -565,7 +678,7 @@ namespace TestFA
                                 }
                             }
                         }
-                        next = _Parse(pc);
+                        next = _ParseExpr(pc);
                         pc.Expecting(')');
                         pc.Advance();
                         next = _ParseModifier(next, pc);
@@ -582,7 +695,7 @@ namespace TestFA
                     case '|':
                         if (-1 != pc.Advance())
                         {
-                            next = _Parse(pc);
+                            next = _ParseExpr(pc);
                             result = new RegexOrExpression(result, next);
                             result.SetLocation(position);
                         }
@@ -1254,91 +1367,10 @@ namespace TestFA
                     return i;
             }
         }
-        static int _ReadRangeChar(IEnumerator<int> e)
-        {
-            int ch;
-            if ('\\' != e.Current || !e.MoveNext())
-            {
-                return e.Current;
-            }
-            ch = e.Current;
-            switch (ch)
-            {
-                case 't':
-                    ch = '\t';
-                    break;
-                case 'n':
-                    ch = '\n';
-                    break;
-                case 'r':
-                    ch = '\r';
-                    break;
-                case '0':
-                    ch = '\0';
-                    break;
-                case 'v':
-                    ch = '\v';
-                    break;
-                case 'f':
-                    ch = '\f';
-                    break;
-                case 'b':
-                    ch = '\b';
-                    break;
-                case 'x':
-                    if (!e.MoveNext())
-                        throw new Exception("Expecting input for escape \\x");
-                    ch = e.Current;
-                    byte x = _FromHexChar(ch);
-                    if (!e.MoveNext())
-                    {
-                        ch = unchecked(x);
-                        return ch;
-                    }
-                    x *= 0x10;
-                    x += _FromHexChar(e.Current);
-                    ch = unchecked(x);
-                    break;
-                case 'u':
-                    if (!e.MoveNext())
-                        throw new Exception("Expecting input for escape \\u");
-                    ch = e.Current;
-                    ushort u = _FromHexChar(ch);
-                    if (!e.MoveNext())
-                    {
-                        ch = unchecked(u);
-                        return ch;
-                    }
-                    u *= 0x10;
-                    u += _FromHexChar(e.Current);
-                    if (!e.MoveNext())
-                    {
-                        ch = unchecked(u);
-                        return ch;
-                    }
-                    u *= 0x10;
-                    u += _FromHexChar(e.Current);
-                    if (!e.MoveNext())
-                    {
-                        ch = unchecked(u);
-                        return ch;
-                    }
-                    u *= 0x10;
-                    u += _FromHexChar(e.Current);
-                    ch = unchecked(u);
-                    break;
-                default: // return itself
-                    break;
-            }
-            return ch;
-        }
     }
     /// <summary>
-    /// Represents a single character literal
+    /// Represents a special terminator node
     /// </summary>
-#if FALIB
-	public
-#endif
     partial class RegexTerminatorExpression : RegexExpression
     {
         public override bool IsLeaf => true;
@@ -1368,7 +1400,6 @@ namespace TestFA
 
         }
 
-
         /// <summary>
         /// Creates a new copy of this expression
         /// </summary>
@@ -1383,6 +1414,106 @@ namespace TestFA
         {
             return new RegexTerminatorExpression();
         }
+
+    }
+    /// <summary>
+    /// Represents a comment node
+    /// </summary>
+    partial class RegexComment : ICloneable, IEquatable<RegexComment>
+    {
+        public long Position { get; private set; } = -1;
+        public void SetPosition(long position)
+        {
+            Position = position;
+        }
+        public string? Text { get; set; } = null;
+        /// <summary>
+        /// Creates a terminator expression with the specified codepoint
+        /// </summary>
+        public RegexComment(string? text = null) {
+            Text = text;
+        }
+
+        /// <summary>
+        /// Provides a string representation of the comment
+        /// </summary>
+        public override string ToString()
+        {
+            if(string.IsNullOrEmpty(Text))
+            {
+                return $"#{Environment.NewLine}";
+            }
+            var sr = new StringReader(Text);
+            var sb = new StringBuilder((int)(Text.Length*1.5));
+            for(var line = sr.ReadLine();line!=null;line = sr.ReadLine())
+            {
+                sb.AppendLine($"# {line}");
+            }
+            return sb.ToString();  
+        }
+        /// <summary>
+        /// Creates a new copy of this expression
+        /// </summary>
+        /// <returns>A new copy of this expression</returns>
+        public RegexComment Clone()
+        {
+            return new RegexComment(Text);
+        }
+        object ICloneable.Clone()
+        {
+            return Clone();
+        }
+        #region Value semantics
+        /// <summary>
+        /// Indicates whether this expression is the same as the right hand expression
+        /// </summary>
+        /// <param name="rhs">The expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public bool Equals(RegexComment? rhs)
+        {
+            if (ReferenceEquals(rhs, this)) return true;
+            if (ReferenceEquals(rhs, null)) return false;
+            if (Position != rhs.Position) return false;
+            return (string.IsNullOrEmpty(Text) && string.IsNullOrEmpty(rhs.Text)) || 0==string.CompareOrdinal(Text, rhs.Text);
+        }
+        /// <summary>
+        /// Indicates whether this expression is the same as the right hand expression
+        /// </summary>
+        /// <param name="rhs">The expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public override bool Equals(object? rhs)
+            => Equals(rhs as RegexLiteralExpression);
+        /// <summary>
+        /// Computes a hash code for this expression
+        /// </summary>
+        /// <returns>A hash code for this expression</returns>
+        public override int GetHashCode()
+            => Position.GetHashCode() ^ (!string.IsNullOrEmpty(Text) ? Text.GetHashCode() : 0);
+        /// <summary>
+        /// Indicates whether or not two expression are the same
+        /// </summary>
+        /// <param name="lhs">The left hand expression to compare</param>
+        /// <param name="rhs">The right hand expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public static bool operator ==(RegexComment lhs, RegexComment rhs)
+        {
+            if (ReferenceEquals(lhs, rhs)) return true;
+            if (ReferenceEquals(lhs, null)) return false;
+            return lhs.Equals(rhs);
+        }
+        /// <summary>
+        /// Indicates whether or not two expression are different
+        /// </summary>
+        /// <param name="lhs">The left hand expression to compare</param>
+        /// <param name="rhs">The right hand expression to compare</param>
+        /// <returns>True if the expressions are different, otherwise false</returns>
+        public static bool operator !=(RegexComment lhs, RegexComment rhs)
+        {
+            if (ReferenceEquals(lhs, rhs)) return false;
+            if (ReferenceEquals(lhs, null)) return true;
+            return !lhs.Equals(rhs);
+        }
+        #endregion
 
     }
     /// <summary>
@@ -1409,7 +1540,136 @@ namespace TestFA
         public RegexExpression? Expression { get; set; } = null;
 
     }
+    /// <summary>
+    /// Represents a single character literal
+    /// </summary>
+    partial class RegexLexerExpression : RegexExpression, IEquatable<RegexLexerExpression>
+    {
+        /// <summary>
+        /// Indicates whether or not this statement is a single element or not
+        /// </summary>
+        /// <remarks>If false, this statement will be wrapped in parentheses if necessary</remarks>
+        public override bool IsSingleElement => Rules.Count == 1 && Rules[0].IsSingleElement;
+        /// <summary>
+        /// Indicates whether or not this statement is a empty element or not
+        /// </summary>
+        public override bool IsEmptyElement => Rules.Count == 0;
+        public override bool IsLeaf => false;
+        /// <summary>
+        /// Indicates the rules in this expression
+        /// </summary>
+        public List<RegexExpression> Rules { get; } = new List<RegexExpression>();
+        
+        /// <summary>
+        /// Creates a lexer expression with the specified rules
+        /// </summary>
+        /// <param name="rules">The rules/param>
+        public RegexLexerExpression(IEnumerable<RegexExpression> rules) { Rules.AddRange(rules); }
+        /// <summary>
+        /// Creates a lexer expression with the specified rules
+        /// </summary>
+        /// <param name="rules">The rules/param>
+        public RegexLexerExpression(params RegexExpression[] rules) { if(rules.Length>0) Rules.AddRange(rules); }
 
+        /// <summary>
+        /// Appends the textual representation to a <see cref="StringBuilder"/>
+        /// </summary>
+        /// <param name="sb">The string builder to use</param>
+        /// <remarks>Used by ToString()</remarks>
+        protected internal override void AppendTo(StringBuilder sb)
+        {
+            foreach(var expr in Rules)
+            {
+                expr.AppendTo(sb);
+                sb.AppendLine();
+            }
+        }
+
+        /// <summary>
+        /// Creates a new copy of this expression
+        /// </summary>
+        /// <returns>A new copy of this expression</returns>
+        protected override RegexExpression CloneImpl()
+            => Clone();
+        /// <summary>
+        /// Creates a new copy of this expression
+        /// </summary>
+        /// <returns>A new copy of this expression</returns>
+        public new RegexLexerExpression Clone()
+        {
+            var rules = new List<RegexExpression>(Rules.Count);
+            foreach(var rule in Rules)
+            {
+                rules.Add(rule.Clone());
+            }
+            return new RegexLexerExpression(rules);
+        }
+
+        #region Value semantics
+        /// <summary>
+        /// Indicates whether this expression is the same as the right hand expression
+        /// </summary>
+        /// <param name="rhs">The expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public bool Equals(RegexLexerExpression? rhs)
+        {
+            if (ReferenceEquals(rhs, this)) return true;
+            if (ReferenceEquals(rhs, null)) return false;
+            if (Position != rhs.Position) return false;
+            if(Rules.Count != rhs.Rules.Count) return false;
+            for(int i = 0;i< Rules.Count;i++)
+            {
+                if (!Rules[i].Equals(rhs.Rules[i])) return false;
+            }
+            return true;
+        }
+        /// <summary>
+        /// Indicates whether this expression is the same as the right hand expression
+        /// </summary>
+        /// <param name="rhs">The expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public override bool Equals(object? rhs)
+            => Equals(rhs as RegexLexerExpression);
+        /// <summary>
+        /// Computes a hash code for this expression
+        /// </summary>
+        /// <returns>A hash code for this expression</returns>
+        public override int GetHashCode()
+        {
+            var result = Position.GetHashCode();
+            foreach(var rule in Rules)
+            {
+                result ^= rule.GetHashCode();
+            }
+            return result;
+        }
+        /// <summary>
+        /// Indicates whether or not two expression are the same
+        /// </summary>
+        /// <param name="lhs">The left hand expression to compare</param>
+        /// <param name="rhs">The right hand expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public static bool operator ==(RegexLexerExpression lhs, RegexLexerExpression rhs)
+        {
+            if (ReferenceEquals(lhs, rhs)) return true;
+            if (ReferenceEquals(lhs, null)) return false;
+            return lhs.Equals(rhs);
+        }
+        /// <summary>
+        /// Indicates whether or not two expression are different
+        /// </summary>
+        /// <param name="lhs">The left hand expression to compare</param>
+        /// <param name="rhs">The right hand expression to compare</param>
+        /// <returns>True if the expressions are different, otherwise false</returns>
+        public static bool operator !=(RegexLexerExpression lhs, RegexLexerExpression rhs)
+        {
+            if (ReferenceEquals(lhs, rhs)) return false;
+            if (ReferenceEquals(lhs, null)) return true;
+            return !lhs.Equals(rhs);
+        }
+        #endregion
+
+    }
     /// <summary>
     /// Represents a single character literal
     /// </summary>
@@ -1565,12 +1825,134 @@ namespace TestFA
         #endregion
 
     }
+
+    /// <summary>
+    /// Represents an anchor
+    /// </summary>
+    partial class RegexAnchorExpression : RegexExpression, IEquatable<RegexAnchorExpression>
+    {
+        const int START_ANCHOR = -2;   // ^
+        const int END_ANCHOR = -3;     // $
+        /// <summary>
+        /// Indicates whether or not this statement is a single element or not
+        /// </summary>
+        /// <remarks>If false, this statement will be wrapped in parentheses if necessary</remarks>
+        public override bool IsSingleElement => true;
+        /// <summary>
+        /// Indicates whether or not this statement is a empty element or not
+        /// </summary>
+        public override bool IsEmptyElement => false;
+        public override bool IsLeaf => true;
+        /// <summary>
+        /// Indicates the anchor type of this expression
+        /// </summary>
+        public RegexAnchorType Type { get; set; } = RegexAnchorType.LineStart;
+       
+        /// <summary>
+        /// Creates a literal expression with the specified codepoint
+        /// </summary>
+        /// <param name="type">The anchor type to represent</param>
+        public RegexAnchorExpression(RegexAnchorType type= RegexAnchorType.LineStart) { Type = type; }
+
+        /// <summary>
+        /// Appends the textual representation to a <see cref="StringBuilder"/>
+        /// </summary>
+        /// <param name="sb">The string builder to use</param>
+        /// <remarks>Used by ToString()</remarks>
+        protected internal override void AppendTo(StringBuilder sb)
+        {
+            switch(Type)
+            {
+                case RegexAnchorType.LineStart:
+                    sb.Append('^');
+                    break;
+                case RegexAnchorType.LineEnd:
+                    sb.Append('$');
+                    break;
+            }
+        }
+        public int GetVirtualCodepoint()
+        {
+            switch (Type)
+            {
+                case RegexAnchorType.LineStart:
+                    return START_ANCHOR;
+                case RegexAnchorType.LineEnd:
+                    return END_ANCHOR;
+            }
+            return -1;
+        }
+        /// <summary>
+        /// Creates a new copy of this expression
+        /// </summary>
+        /// <returns>A new copy of this expression</returns>
+        protected override RegexExpression CloneImpl()
+            => Clone();
+        /// <summary>
+        /// Creates a new copy of this expression
+        /// </summary>
+        /// <returns>A new copy of this expression</returns>
+        public new RegexAnchorExpression Clone()
+        {
+            return new RegexAnchorExpression(Type);
+        }
+
+        #region Value semantics
+        /// <summary>
+        /// Indicates whether this expression is the same as the right hand expression
+        /// </summary>
+        /// <param name="rhs">The expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public bool Equals(RegexAnchorExpression? rhs)
+        {
+            if (ReferenceEquals(rhs, this)) return true;
+            if (ReferenceEquals(rhs, null)) return false;
+            if (Position != rhs.Position) return false;
+            return Type == rhs.Type;
+        }
+        /// <summary>
+        /// Indicates whether this expression is the same as the right hand expression
+        /// </summary>
+        /// <param name="rhs">The expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public override bool Equals(object? rhs)
+            => Equals(rhs as RegexAnchorExpression);
+        /// <summary>
+        /// Computes a hash code for this expression
+        /// </summary>
+        /// <returns>A hash code for this expression</returns>
+        public override int GetHashCode()
+            => Position.GetHashCode() ^ Type.GetHashCode();
+        /// <summary>
+        /// Indicates whether or not two expression are the same
+        /// </summary>
+        /// <param name="lhs">The left hand expression to compare</param>
+        /// <param name="rhs">The right hand expression to compare</param>
+        /// <returns>True if the expressions are the same, otherwise false</returns>
+        public static bool operator ==(RegexAnchorExpression lhs, RegexAnchorExpression rhs)
+        {
+            if (ReferenceEquals(lhs, rhs)) return true;
+            if (ReferenceEquals(lhs, null)) return false;
+            return lhs.Equals(rhs);
+        }
+        /// <summary>
+        /// Indicates whether or not two expression are different
+        /// </summary>
+        /// <param name="lhs">The left hand expression to compare</param>
+        /// <param name="rhs">The right hand expression to compare</param>
+        /// <returns>True if the expressions are different, otherwise false</returns>
+        public static bool operator !=(RegexAnchorExpression lhs, RegexAnchorExpression rhs)
+        {
+            if (ReferenceEquals(lhs, rhs)) return false;
+            if (ReferenceEquals(lhs, null)) return true;
+            return !lhs.Equals(rhs);
+        }
+        #endregion
+
+    }
     /// <summary>
     /// Represents the base partial class for regex charset entries
     /// </summary>
-#if FALIB
-	public
-#endif
     abstract partial class RegexCharsetEntry : ICloneable
     {
         /// <summary>
@@ -1692,9 +2074,7 @@ namespace TestFA
     /// <summary>
     /// Represents a single character charset entry
     /// </summary>
-#if FALIB
-	public
-#endif
+
     partial class RegexCharsetCharEntry : RegexCharsetEntry, IEquatable<RegexCharsetCharEntry>
     {
         /// <summary>
@@ -1766,7 +2146,7 @@ namespace TestFA
         /// </summary>
         /// <param name="rhs">The charset entry to compare</param>
         /// <returns>True if the charset entries are the same, otherwise false</returns>
-        public bool Equals(RegexCharsetCharEntry rhs)
+        public bool Equals(RegexCharsetCharEntry? rhs)
         {
             if (ReferenceEquals(rhs, this)) return true;
             if (ReferenceEquals(rhs, null)) return false;
@@ -1777,7 +2157,7 @@ namespace TestFA
         /// </summary>
         /// <param name="rhs">The charset entry to compare</param>
         /// <returns>True if the charset entries are the same, otherwise false</returns>
-        public override bool Equals(object rhs)
+        public override bool Equals(object? rhs)
             => Equals(rhs as RegexCharsetCharEntry);
         /// <summary>
         /// Computes a hash code for this charset entry
@@ -1814,9 +2194,6 @@ namespace TestFA
     /// <summary>
     /// Represents a character set range entry
     /// </summary>
-#if FALIB
-	public
-#endif
     partial class RegexCharsetRangeEntry : RegexCharsetEntry
     {
         /// <summary>
@@ -1913,7 +2290,7 @@ namespace TestFA
         /// </summary>
         /// <param name="rhs">The charset entry to compare</param>
         /// <returns>True if the charset entries are the same, otherwise false</returns>
-        public bool Equals(RegexCharsetRangeEntry rhs)
+        public bool Equals(RegexCharsetRangeEntry? rhs)
         {
             if (ReferenceEquals(rhs, this)) return true;
             if (ReferenceEquals(rhs, null)) return false;
@@ -1924,7 +2301,7 @@ namespace TestFA
         /// </summary>
         /// <param name="rhs">The charset entry to compare</param>
         /// <returns>True if the charset entries are the same, otherwise false</returns>
-        public override bool Equals(object rhs)
+        public override bool Equals(object? rhs)
             => Equals(rhs as RegexCharsetRangeEntry);
         /// <summary>
         /// Computes a hash code for this charset entry

@@ -1,5 +1,6 @@
 ﻿// An implementation of Dr. Robert van Engelen's lazy DFA matching state construction algorithm used in his RE/FLEX project
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -11,11 +12,13 @@ namespace TestFA
     {
         public static Dfa BuildDfa(RegexExpression regexAst)
         {
-            
+            // we have to expand the tree
+            regexAst = RegexExpression.Parse(regexAst.ToString("x"));
             int positionCounter = 1;
             RegexTerminatorExpression endMarker=null;
             int[] points;
-            bool isLexer = regexAst is RegexOrExpression;
+            int[] anchorPoints;
+            bool isLexer = regexAst is RegexLexerExpression;
             Dictionary<int, RegexExpression> positions = new Dictionary<int, RegexExpression>();
             Dictionary<RegexExpression, HashSet<RegexExpression>> followPos =
                 new Dictionary<RegexExpression, HashSet<RegexExpression>>();
@@ -34,16 +37,24 @@ namespace TestFA
             // Track lazy context for proper attribution
             HashSet<RegexExpression> _currentLazyContext = new HashSet<RegexExpression>();
             var p = new HashSet<int>();
+            var ap = new HashSet<int>();
             regexAst.Visit((parent, expression, childIndex, level) =>
             {
-                foreach (var range in expression.GetRanges())
+                if (expression is RegexAnchorExpression anchor)
                 {
-                    p.Add(0);
-                    if (range.Min == -1 || range.Max == -1) continue;
-                    p.Add(range.Min);
-                    if (range.Max < 0x10ffff)
+                    ap.Add(anchor.GetVirtualCodepoint());
+                }
+                else
+                {
+                    foreach (var range in expression.GetRanges())
                     {
-                        p.Add((range.Max + 1));
+                        p.Add(0);
+                        if (range.Min == -1 || range.Max == -1) continue; // shouldn't happen.
+                        p.Add(range.Min);
+                        if (range.Max < 0x10ffff)
+                        {
+                            p.Add((range.Max + 1));
+                        }
                     }
                 }
                 return true;
@@ -64,19 +75,18 @@ namespace TestFA
             var augmentedAst = isLexer
                 ? AugmentWithEndMarkersForLexer(regexAst, positions, positionToAcceptSymbol, endMarkerToAcceptSymbol)
                 : AugmentWithEndMarker(regexAst, out endMarker, positions);
-
             // For non-lexer case, we still need the endMarker reference
             if (!isLexer)
             {
-                endMarkerToAcceptSymbol[endMarker] = 0;
+                endMarkerToAcceptSymbol[endMarker!] = 0;
             }
 
             // Step 3: Assign positions to leaf nodes
             AssignPositions(augmentedAst, positions, ref positionCounter);
-
+            
             // Step 4: Compute nullable, firstpos, lastpos
             ComputeNodeProperties(augmentedAst);
-
+            // DEBUG AFTER ComputeNodeProperties
             // Step 5: Compute followpos with proper disjunction handling
             ComputeFollowPos(augmentedAst, positions, followPos);
 
@@ -91,87 +101,47 @@ namespace TestFA
 
         // New method to handle lexer augmentation with multiple end markers
         private static RegexExpression AugmentWithEndMarkersForLexer(
-            RegexExpression root,
-            Dictionary<int, RegexExpression> positions,
-            Dictionary<RegexExpression, int> positionToAcceptSymbol,
-            Dictionary<RegexTerminatorExpression, int> endMarkerToAcceptSymbol)
+    RegexExpression root,
+    Dictionary<int, RegexExpression> positions,
+    Dictionary<RegexExpression, int> positionToAcceptSymbol,
+    Dictionary<RegexTerminatorExpression, int> endMarkerToAcceptSymbol)
         {
-            if (!(root is RegexOrExpression rootOr))
+            var rootLexer = root as RegexLexerExpression;
+            if (rootLexer == null)
             {
-                throw new ArgumentException("Expected RegexOrExpression for lexer mode");
+                throw new ArgumentException("Expected RegexLexerExpression for lexer mode");
             }
 
-            // Create a new OR expression with each disjunction augmented with its own end marker
-            var augmentedDisjunctions = new List<RegexExpression>();
+            // Create new lexer with augmented rules
+            var augmentedRules = new List<RegexExpression>();
             int acceptSymbol = 0;
 
-            // Process each disjunction in the OR expression
-            var disjunctions = FlattenOrExpression(rootOr);
-
-            foreach (var disjunction in disjunctions)
+            foreach (var rule in rootLexer.Rules)
             {
                 var endMarker = new RegexTerminatorExpression();
                 endMarkerToAcceptSymbol[endMarker] = acceptSymbol;
 
-                // Mark all positions in this disjunction with the accept symbol
-                MarkPositionsWithAcceptSymbol(disjunction, acceptSymbol, positionToAcceptSymbol);
+                MarkPositionsWithAcceptSymbol(rule, acceptSymbol, positionToAcceptSymbol);
 
-                var augmentedDisjunction = new RegexConcatExpression(disjunction, endMarker);
-                augmentedDisjunctions.Add(augmentedDisjunction);
+                var augmentedRule = new RegexConcatExpression(rule, endMarker);
+                augmentedRules.Add(augmentedRule);
 
                 acceptSymbol++;
             }
 
-            // Rebuild the OR expression with augmented disjunctions
-            return BuildOrExpression(augmentedDisjunctions);
+            // Return new lexer with augmented rules
+            var augmentedLexer = new RegexLexerExpression(augmentedRules);
+            // Copy any other properties if needed
+            return augmentedLexer;
         }
 
-        // Helper to flatten nested OR expressions into a list of disjunctions
-        private static List<RegexExpression> FlattenOrExpression(RegexOrExpression orExpr)
-        {
-            var disjunctions = new List<RegexExpression>();
-
-            void FlattenRecursive(RegexExpression expr)
-            {
-                if (expr is RegexOrExpression nestedOr)
-                {
-                    FlattenRecursive(nestedOr.Left);
-                    FlattenRecursive(nestedOr.Right);
-                }
-                else
-                {
-                    disjunctions.Add(expr);
-                }
-            }
-
-            FlattenRecursive(orExpr);
-            return disjunctions;
-        }
-
-        // Helper to rebuild OR expression from list of disjunctions
-        private static RegexExpression BuildOrExpression(List<RegexExpression> disjunctions)
-        {
-            if (disjunctions.Count == 0)
-                throw new ArgumentException("Cannot build OR expression from empty list");
-
-            if (disjunctions.Count == 1)
-                return disjunctions[0];
-
-            RegexExpression result = disjunctions[0];
-            for (int i = 1; i < disjunctions.Count; i++)
-            {
-                result = new RegexOrExpression(result, disjunctions[i]);
-            }
-
-            return result;
-        }
 
         // Mark all positions in a subtree with the given accept symbol
         private static void MarkPositionsWithAcceptSymbol(RegexExpression expr, int acceptSymbol, Dictionary<RegexExpression, int> positionToAcceptSymbol)
         {
             expr.Visit((parent, node, childIndex, level) =>
             {
-                if (IsLeafNode(node))
+                if (node.IsLeaf)
                 {
                     positionToAcceptSymbol[node] = acceptSymbol;
                 }
@@ -193,7 +163,7 @@ namespace TestFA
                 // Track the lazy parent for all positions inside
                 repeat.Expression?.Visit((p, e, ci, l) =>
                 {
-                    if (IsLeafNode(e))
+                    if (e.IsLeaf)
                     {
                         positionToLazyParent[e] = repeat;
                     }
@@ -202,7 +172,7 @@ namespace TestFA
             }
 
             // Mark leaf nodes if they're in lazy context
-            if (IsLeafNode(ast) && currentLazyContext)
+            if (ast.IsLeaf && currentLazyContext)
             {
                 lazyPositions[ast] = true;
             }
@@ -231,7 +201,7 @@ namespace TestFA
         {
             if (node == null) return;
 
-            if (IsLeafNode(node))
+            if (node.IsLeaf)
             {
                 if (node.GetDfaPosition() == -1)
                 {
@@ -243,6 +213,12 @@ namespace TestFA
 
             switch (node)
             {
+                case RegexLexerExpression lexer:  // ADD THIS CASE
+                    foreach (var rule in lexer.Rules)
+                    {
+                        AssignPositions(rule, _positions, ref _positionCounter);
+                    }
+                    break;
                 case RegexBinaryExpression binary:
                     AssignPositions(binary.Left, _positions, ref _positionCounter);
                     AssignPositions(binary.Right, _positions, ref _positionCounter);
@@ -254,17 +230,35 @@ namespace TestFA
             }
         }
 
-        private static bool IsLeafNode(RegexExpression node)
-        {
-            return node is RegexLiteralExpression || node is RegexCharsetExpression || node is RegexTerminatorExpression;
-        }
-
+        
         private static void ComputeNodeProperties(RegexExpression node)
         {
             if (node == null) return;
 
             switch (node)
             {
+                case RegexLexerExpression lexer:
+                    // Compute properties for all rules first
+                    foreach (var rule in lexer.Rules)
+                    {
+                        ComputeNodeProperties(rule);
+                    }
+
+                    // Lexer is nullable if any rule is nullable
+                    node.SetNullable(lexer.Rules.Any(r => r.GetNullable()));
+
+                    // Lexer firstpos is union of all rules' firstpos
+                    foreach (var rule in lexer.Rules)
+                    {
+                        node.GetFirstPos().UnionWith(rule.GetFirstPos());
+                    }
+
+                    // Lexer lastpos is union of all rules' lastpos  
+                    foreach (var rule in lexer.Rules)
+                    {
+                        node.GetLastPos().UnionWith(rule.GetLastPos());
+                    }
+                    break;
                 case RegexConcatExpression concat:
                     ComputeNodeProperties(concat.Left);
                     ComputeNodeProperties(concat.Right);
@@ -322,6 +316,7 @@ namespace TestFA
                     break;
                 case RegexTerminatorExpression:
                 case RegexLiteralExpression:
+                case RegexAnchorExpression:
                     node.SetNullable(false);
                     node.GetFirstPos().Add(node);
                     node.GetLastPos().Add(node);
@@ -358,6 +353,13 @@ namespace TestFA
             
             switch (node)
             {
+                case RegexLexerExpression lexerExpr:  // ADD THIS CASE
+                    foreach (var rule in lexerExpr.Rules)
+                    {
+                        ComputeFollowPosRecursive(rule, _followPos);
+                    }
+                    break;
+
                 case RegexConcatExpression concat:
                     if (concat.Left != null && concat.Right != null)
                     {
@@ -451,12 +453,27 @@ namespace TestFA
                 var currentLazyPositions = GetLazyPositionsFromState(currentState);
               // Group positions by character ranges for transition construction
                 var transitionMap = new Dictionary<FARange, HashSet<RegexExpression>>();
-
                 foreach (var pos in currentPositions)
                 {
-                    // Skip all end markers (not just the single endMarker)
+                    // Skip all end markers
                     if (pos is RegexTerminatorExpression) continue;
 
+                    // Handle anchor positions - add them as single-codepoint ranges
+                    if (pos is RegexAnchorExpression anchor)
+                    {
+                        var virtualCodepoint = anchor.GetVirtualCodepoint();
+                        var anchorRange = new FARange(virtualCodepoint, virtualCodepoint);
+                        if (!transitionMap.TryGetValue(anchorRange, out var anchorSet))
+                        {
+                            anchorSet = new HashSet<RegexExpression>();
+                            transitionMap.Add(anchorRange, anchorSet);
+                        }
+                        anchorSet.Add(pos);
+                        continue;
+                        
+                    }
+
+                    // Handle character ranges (existing code for non-anchors)
                     for (int i = 0; i < points.Length; ++i)
                     {
                         var first = points[i];
@@ -474,15 +491,13 @@ namespace TestFA
                         }
                     }
                 }
-
+                
                 // Create transitions for each character range
                 foreach (var transition in transitionMap)
                 {
                     
                     var range = transition.Key;
                     var positions = transition.Value;
-
-
 
                     var nextPositions = new HashSet<RegexExpression>();
                     foreach (var pos in positions)
@@ -492,6 +507,7 @@ namespace TestFA
                             nextPositions.UnionWith(followPos[pos]);
                         }
                     }
+
                     var nextPosStr = string.Join(",", nextPositions.Select(p => p.GetDfaPosition()));
                     
                     if (nextPositions.Count == 0) continue;

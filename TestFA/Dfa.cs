@@ -58,20 +58,33 @@ namespace TestFA
                     if (!object.Equals(attr.Value, val)) return false;
                 } else
                 {
-                    var col1 = attr.Value as System.Collections.ICollection;
-                    var col2 = val as System.Collections.ICollection;
-                    if(col1.Count!=col2.Count) return false;
-                    foreach(var v1 in col1)
+                    var list1 = attr.Value as System.Collections.IList;
+                    var list2 = val as System.Collections.IList;
+                    if (list1 != null && list2 != null)
                     {
-                        var found = false;
-                        foreach(var v2 in col2)
+                        if(list1.Count != list2.Count) return false;
+                        for(int i = 0;i < list1.Count;i++)
                         {
-                            if(object.Equals(v1, v2))
-                            {
-                                found = true; break;
-                            }
+                            if (!object.Equals(list1[i], list2[i])) return false;
                         }
-                        if(!found) return false;   
+                    }
+                    else
+                    {
+                        var col1 = attr.Value as System.Collections.ICollection;
+                        var col2 = val as System.Collections.ICollection;
+                        if (col1.Count != col2.Count) return false;
+                        foreach (var v1 in col1)
+                        {
+                            var found = false;
+                            foreach (var v2 in col2)
+                            {
+                                if (object.Equals(v1, v2))
+                                {
+                                    found = true; break;
+                                }
+                            }
+                            if (!found) return false;
+                        }
                     }
                 }
 
@@ -572,6 +585,15 @@ namespace TestFA
             result = result.Replace("\f", "\\f");
             return result;
         }
+        static bool _IsPrintable(int cp)
+        {
+            var str = char.ConvertFromUtf32(cp);
+            if(!char.IsWhiteSpace(str,0) && char.IsSymbol(str,0))
+            {
+                return false;
+            }
+            return true;
+        }
         void _WriteDotTo(TextWriter writer)
         {
             writer.WriteLine("digraph FA {");
@@ -604,38 +626,77 @@ namespace TestFA
                     writer.Write(di.ToString());
                     writer.Write(" [label=\"");
                     var sb = new StringBuilder();
-                    //var notRanges = new List<FARange>(FARange.ToNotRanges(rngGrp.Value));
-                    var notRanges = new List<FARange>(_InvertRanges(rngGrp.Value));
-                    if (notRanges.Count * 1.5 > rngGrp.Value.Count)
+                    // gather the specials and remove them from the standard transitions
+                    var specials = new List<FARange>();
+                    for(var j = 0;j<rngGrp.Value.Count;++j)
                     {
-                        _AppendRangeTo(sb, rngGrp.Value);
+                        var v = rngGrp.Value[j];
+                        if (v.Min < -1 || v.Max < -1) {
+                            specials.Add(v);
+                            rngGrp.Value.RemoveAt(j);
+                            --j;
+                        }
                     }
-                    else
+                    foreach(var spec in specials)
                     {
-                        if (notRanges.Count == 0)
+                        if(spec.Min==-2)
                         {
-                            sb.Append(".\\n");
+                            writer.Write(_EscapeLabel("{^}"));
+                        } else if(spec.Min==-3)
+                        {
+                            writer.Write(_EscapeLabel("{$}"));
+                        }
+                        
+                    }
+                    if (rngGrp.Value.Count > 0)
+                    {
+                        //var notRanges = new List<FARange>(FARange.ToNotRanges(rngGrp.Value));
+                        var notRanges = new List<FARange>(_InvertRanges(rngGrp.Value));
+                        var hasNonPrint = false;
+                        foreach(var v in rngGrp.Value)
+                        {
+                            if(!_IsPrintable(v.Min) || !_IsPrintable(v.Max)) {
+                                hasNonPrint = true; break;
+                            }
+                        }
+                        var hasNotNonPrint = false;
+                        foreach (var v in notRanges)
+                        {
+                            if (!_IsPrintable(v.Min) || !_IsPrintable(v.Max)) {
+                                hasNotNonPrint = true; break;
+                            }
+                        }
+                        if ((hasNotNonPrint && !hasNonPrint)  || (hasNonPrint==hasNotNonPrint && notRanges.Count * 1.5 > rngGrp.Value.Count))
+                        {
+                            _AppendRangeTo(sb, rngGrp.Value);
                         }
                         else
                         {
-                            sb.Append("^");
-                            _AppendRangeTo(sb, notRanges);
+                            if (notRanges.Count == 0)
+                            {
+                                sb.Append(".\\n");
+                            }
+                            else
+                            {
+                                sb.Append("^");
+                                _AppendRangeTo(sb, notRanges);
+                            }
                         }
-                    }
-                    if (sb.Length != 1 || " " == sb.ToString())
-                    {
-                        writer.Write('[');
-                        if (sb.Length > 16)
+                        if (sb.Length != 1 || " " == sb.ToString())
                         {
-                            sb.Length = 16;
-                            sb.Append("...");
+                            writer.Write('[');
+                            if (sb.Length > 16)
+                            {
+                                sb.Length = 16;
+                                sb.Append("...");
+                            }
+                            writer.Write(_EscapeLabel(sb.ToString()));
+                            writer.Write(']');
                         }
-                        writer.Write(_EscapeLabel(sb.ToString()));
-                        writer.Write(']');
-                    }
-                    else
-                    {
-                        writer.Write(_EscapeLabel(sb.ToString()));
+                        else
+                        {
+                            writer.Write(_EscapeLabel(sb.ToString()));
+                        }
                     }
                     writer.WriteLine("\"]");
 
