@@ -24,7 +24,7 @@ namespace TestFA
             try
             {
                 var ccomment = @"\/\*([^\*]|\*+[^\/])*\*\/";
-                var ccommentLazy = "# C comment\n"+@"\/\*(.|\n)*?\*\/";
+                var ccommentLazy = "# C comment\n"+@"/\*(.|\n)*?\*/";
                 var test1 = "(?<baz>foo|fubar)+";
                 var test2 = "(a|b)*?(b{2})";
                 var test3 = "^hello world!$";
@@ -63,6 +63,7 @@ namespace TestFA
                 TestDfa(dfa, "foobaz");
                 TestDfa(dfa, "/* broke *");
                 TestDfa(dfa, "hello world!");
+                TestDfa(dfa, "hello world!\n");
             }
             catch (Exception ex)
             {
@@ -77,7 +78,7 @@ namespace TestFA
             var currentState = startState;
             int position = 0;
             bool atLineStart = true;
-
+            bool atLineEnd = input.Length==0 || input.Length==1 && input[0]=='\n';
             Console.WriteLine($"\n=== Testing '{input}' ===");
 
             while (position <= input.Length)
@@ -99,7 +100,7 @@ namespace TestFA
                     }
                     else if (transition.Min == -3 && transition.Max == -3)  // END_ANCHOR $
                     {
-                        if (position == input.Length)
+                        if (atLineEnd)
                         {
                             currentState = transition.To;
                             found = true;
@@ -114,6 +115,7 @@ namespace TestFA
                         {
                             currentState = transition.To;
                             position++;
+                            atLineEnd = (position == input.Length) || (position < input.Length && input[position] == '\n');
                             atLineStart = (c == '\n');
                             found = true;
                             break;  // Exit foreach, don't check other transitions
